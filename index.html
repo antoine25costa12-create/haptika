@@ -19,7 +19,7 @@
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;overflow:hidden;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent;overscroll-behavior:none;background:#161618;color:var(--text);
     font:13px/1.35 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-  canvas#c{position:fixed;inset:0;width:100vw;height:100vh;display:block;touch-action:none;cursor:crosshair}
+  canvas#c{position:fixed;left:0;top:0;width:100%;height:100%;display:block;touch-action:none;cursor:crosshair}
   #panel{position:fixed;top:10px;left:10px;bottom:10px;width:268px;background:var(--panel);
     border:1px solid var(--line);border-radius:12px;overflow-y:auto;padding:14px 14px 18px;
     scrollbar-width:thin;scrollbar-color:#333 transparent;transition:transform .2s ease}
@@ -156,7 +156,21 @@ if(!gl.getExtension('EXT_color_buffer_float') && !gl.getExtension('EXT_color_buf
   fail("Ce navigateur ne peut pas rendre dans des textures flottantes (EXT_color_buffer_float).");
 
 let dpr = Math.min(window.devicePixelRatio||1, 2);
-function fitCanvas(){ canvas.width=Math.round(innerWidth*dpr); canvas.height=Math.round(innerHeight*dpr); dirtyView=true; }
+// la taille du tampon de dessin suit la taille réellement affichée du canvas (sur iPad, 100vh ≠ innerHeight)
+let cssRect={left:0,top:0,width:1,height:1,bottom:1};
+function fitCanvas(){
+  const r=canvas.getBoundingClientRect();
+  cssRect={left:r.left,top:r.top,width:Math.max(1,r.width),height:Math.max(1,r.height),bottom:r.bottom};
+  const w=Math.round(cssRect.width*dpr), h=Math.round(cssRect.height*dpr);
+  if(canvas.width!==w||canvas.height!==h){ canvas.width=w; canvas.height=h; }
+  dirtyView=true;
+}
+// pixels du tampon par pixel CSS, mesurés séparément en largeur et en hauteur
+// (mesuré à chaque appel : la position du canvas peut bouger avec la barre d'état ou la rotation)
+const kx=()=>canvas.width/Math.max(1,canvas.getBoundingClientRect().width);
+const ky=()=>canvas.height/Math.max(1,canvas.getBoundingClientRect().height);
+function clientToGL(cx,cy){ const r=canvas.getBoundingClientRect();
+  return [(cx-r.left)*canvas.width/Math.max(1,r.width), (r.bottom-cy)*canvas.height/Math.max(1,r.height)]; }
 
 // document size: screen sized, capped
 const MAXDOC = 2400;
@@ -508,7 +522,7 @@ function frame(){
 // ---------------------------------------------------------------- view & input
 function resetView(){ const s=Math.min(canvas.width/W, canvas.height/H);
   view={s, ox:(canvas.width-W*s)/2, oy:(canvas.height-H*s)/2}; dirtyView=true; }
-function screenGL(e){ const r=canvas.getBoundingClientRect(); return [(e.clientX-r.left)*dpr, (r.bottom-e.clientY)*dpr]; }
+function screenGL(e){ return clientToGL(e.clientX,e.clientY); }
 function toDoc(e){ const [sx,sy]=screenGL(e); return [(sx-view.ox)/view.s, (sy-view.oy)/view.s]; }
 
 let panning=null, lightDrag=null, skDrag=null, penSeen=false, activePointer=null, activeType=null, lineMode=false;
@@ -545,8 +559,7 @@ function updateGesture(){
   const [cx,cy]=touchCentroid(), d=touchSpread(), g=gesture;
   const k = g.d>0 && d>0 ? d/g.d : 1;
   if(Math.hypot(cx-g.cx,cy-g.cy)>10 || Math.abs(k-1)>0.06) g.moved=true;
-  const r=canvas.getBoundingClientRect();
-  const c0=[(g.cx-r.left)*dpr,(r.bottom-g.cy)*dpr], c1=[(cx-r.left)*dpr,(r.bottom-cy)*dpr];
+  const c0=clientToGL(g.cx,g.cy), c1=clientToGL(cx,cy);
   const s=Math.max(0.1,Math.min(12,g.view.s*k));
   const dx=(c0[0]-g.view.ox)/g.view.s, dy=(c0[1]-g.view.oy)/g.view.s;
   view.s=s; view.ox=c1[0]-dx*s; view.oy=c1[1]-dy*s; dirtyView=true;
@@ -585,7 +598,7 @@ canvas.addEventListener('pointermove',e=>{
     if(gesture){ updateGesture(); return; }
   }
   if(e.pointerId!==activePointer) return;
-  if(panning){ view.ox=panning.ox+(e.clientX-panning.x)*dpr; view.oy=panning.oy-(e.clientY-panning.y)*dpr; dirtyView=true; return; }
+  if(panning){ view.ox=panning.ox+(e.clientX-panning.x)*kx(); view.oy=panning.oy-(e.clientY-panning.y)*ky(); dirtyView=true; return; }
   if(lightDrag){ setVal('az', ((lightDrag.az+(e.clientX-lightDrag.x)*0.6)%360+360)%360);
     setVal('el', Math.max(8,Math.min(85, lightDrag.el-(e.clientY-lightDrag.y)*0.2))); return; }
   if(skDrag){ const [x,y]=toDoc(e); sketch.rect[0]=skDrag.r[0]+x-skDrag.x; sketch.rect[1]=skDrag.r[1]+y-skDrag.y; dirtyShade=true; return; }
@@ -626,6 +639,9 @@ canvas.addEventListener('wheel',e=>{
   view.ox=sx-(sx-view.ox)*ns/view.s; view.oy=sy-(sy-view.oy)*ns/view.s; view.s=ns; dirtyView=true;
 },{passive:false});
 addEventListener('resize',()=>{ fitCanvas(); });
+addEventListener('orientationchange',()=>setTimeout(fitCanvas,300));
+if(window.ResizeObserver) new ResizeObserver(()=>fitCanvas()).observe(canvas);
+if(window.visualViewport) visualViewport.addEventListener('resize',()=>fitCanvas());
 
 // ---------------------------------------------------------------- export
 function readSurface(transparent){
