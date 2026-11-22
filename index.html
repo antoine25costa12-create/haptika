@@ -149,7 +149,7 @@
 "use strict";
 // ---------------------------------------------------------------- setup
 const canvas = document.getElementById('c');
-const gl = canvas.getContext('webgl2', {antialias:false, alpha:false, premultipliedAlpha:false});
+const gl = canvas.getContext('webgl2', {antialias:false, alpha:false, premultipliedAlpha:false, desynchronized:true, powerPreference:'high-performance'});
 function fail(m){ const e=document.getElementById('err'); e.style.display='grid'; e.textContent=m; throw new Error(m); }
 if(!gl) fail("Ce navigateur ne prend pas en charge WebGL2.");
 if(!gl.getExtension('EXT_color_buffer_float') && !gl.getExtension('EXT_color_buffer_half_float'))
@@ -391,6 +391,7 @@ function beginStroke(){
        rough:st.rough, chaos:st.chaos, grain:st.grain, ribs:st.ribs, seed:Math.random()*100 };
   gl.bindFramebuffer(gl.FRAMEBUFFER,strokeFbo); gl.clearBufferfv(gl.COLOR,0,[0,0,0,0]);
   stroking=true; hasStamps=false; last=null;
+  composite(null);   // work = copie de base ; ensuite on ne recalcule que la zone touchée
 }
 function pushStamp(x,y,r){
   if(sp.chaos>0){ const a=Math.random()*6.283, j=Math.random()*sp.chaos*r*0.45;
@@ -414,18 +415,30 @@ function addPoint(x,y,pr){
   for(let i=1;i<=n;i++){ const t=i/n; pushStamp(last.x+dx*t, last.y+dy*t, last.r+(r-last.r)*t); }
   last={x,y,r};
 }
+// zone touchée par des tampons : [x0,y0,x1,y1] en pixels du document
 function flushStamps(){
-  if(!stamps.length) return false;
+  if(!stamps.length) return null;
   const data=new Float32Array(stamps); stamps=[];
+  const rect=[Infinity,Infinity,-Infinity,-Infinity];
+  for(let i=0;i<data.length;i+=3){ const x=data[i], y=data[i+1], r=data[i+2]+3;
+    if(x-r<rect[0]) rect[0]=x-r; if(y-r<rect[1]) rect[1]=y-r; if(x+r>rect[2]) rect[2]=x+r; if(y+r>rect[3]) rect[3]=y+r; }
   gl.bindFramebuffer(gl.FRAMEBUFFER,strokeFbo); gl.viewport(0,0,W,H);
   gl.useProgram(P_STAMP.p); gl.uniform2f(P_STAMP.u.uDoc,W,H); gl.uniform1f(P_STAMP.u.uSize,sp.size);
   gl.enable(gl.BLEND); gl.blendEquation(gl.MAX); gl.blendFunc(gl.ONE,gl.ONE);
   gl.bindVertexArray(stampVAO); gl.bindBuffer(gl.ARRAY_BUFFER,stampBuf); gl.bufferData(gl.ARRAY_BUFFER,data,gl.STREAM_DRAW);
   gl.drawArraysInstanced(gl.TRIANGLES,0,6,data.length/3);
   gl.disable(gl.BLEND); gl.bindVertexArray(null);
-  return true;
+  return rect;
 }
-function composite(){
+function scissor(rect, margin){
+  if(!rect){ gl.disable(gl.SCISSOR_TEST); return; }
+  const m=margin||0, x0=Math.max(0,Math.floor(rect[0]-m)), y0=Math.max(0,Math.floor(rect[1]-m));
+  const x1=Math.min(W,Math.ceil(rect[2]+m)), y1=Math.min(H,Math.ceil(rect[3]+m));
+  gl.enable(gl.SCISSOR_TEST); gl.scissor(x0,y0,Math.max(0,x1-x0),Math.max(0,y1-y0));
+}
+// rayon d'influence d'un changement de hauteur sur l'ombrage : ombres portées (~94 px) + occlusion (32 px)
+const SHADE_MARGIN=100;
+function composite(rect){
   gl.bindFramebuffer(gl.FRAMEBUFFER,work.f); gl.viewport(0,0,W,H);
   gl.useProgram(P_COMP.p); const u=P_COMP.u;
   bindTex(0,base.h); bindTex(1,base.c); bindTex(2,strokeTex);
@@ -433,11 +446,18 @@ function composite(){
   gl.uniform1i(u.uMode,sp.mode); gl.uniform1i(u.uProf,sp.prof); gl.uniform3fv(u.uCol,sp.col);
   gl.uniform1f(u.uMat,sp.mat); gl.uniform1f(u.uHeight,sp.height); gl.uniform1f(u.uSize,sp.size);
   gl.uniform1f(u.uRough,sp.rough); gl.uniform1f(u.uGrain,sp.grain); gl.uniform1f(u.uRibs,sp.ribs); gl.uniform1f(u.uSeed,sp.seed);
+  scissor(rect);
   gl.bindVertexArray(emptyVAO); gl.drawArrays(gl.TRIANGLES,0,3);
+  scissor(null);
+}
+// met à jour l'affichage pour la seule zone modifiée par le trait
+function updateStroke(){
+  const r=flushStamps(); if(!r) return;
+  composite(r); shade(work, shadedFbo, false, r); dirtyView=true;
 }
 function endStroke(){
   if(!stroking) return;
-  if(flushStamps()) composite();
+  updateStroke();
   stroking=false;
   if(hasStamps){
     undoStack.push(base); if(undoStack.length>UNDO_MAX) freeSurface(undoStack.shift());
@@ -445,7 +465,6 @@ function endStroke(){
     base=work; work=makeSurface();
     if(last) lastEnd={x:last.x,y:last.y};
   }
-  dirtyShade=true;
 }
 function undo(){ if(stroking||!undoStack.length) return; redoStack.push(base); base=undoStack.pop(); dirtyShade=true; }
 function redo(){ if(stroking||!redoStack.length) return; undoStack.push(base); base=redoStack.pop(); dirtyShade=true; }
@@ -453,7 +472,7 @@ function clearAll(){ if(stroking) return; undoStack.push(base); if(undoStack.len
   redoStack.splice(0).forEach(freeSurface); base=makeSurface(); dirtyShade=true; }
 
 // ---------------------------------------------------------------- shading
-function shade(surf, target, transparent){
+function shade(surf, target, transparent, rect){
   gl.bindFramebuffer(gl.FRAMEBUFFER,target); gl.viewport(0,0,W,H);
   gl.useProgram(P_SHADE.p); const u=P_SHADE.u;
   bindTex(0,surf.h); bindTex(1,surf.c); bindTex(2,sketchTex);
@@ -467,7 +486,9 @@ function shade(surf, target, transparent){
   gl.uniform1f(u.uSkA, showSk ? st.skop : 0);
   gl.uniform4fv(u.uSkRect, sketch ? sketch.rect : [0,0,1,1]);
   gl.uniform1i(u.uTransp, transparent?1:0);
+  scissor(rect, SHADE_MARGIN);
   gl.bindVertexArray(emptyVAO); gl.drawArrays(gl.TRIANGLES,0,3);
+  scissor(null);
 }
 function drawView(){
   gl.bindFramebuffer(gl.FRAMEBUFFER,null); gl.viewport(0,0,canvas.width,canvas.height);
@@ -478,8 +499,8 @@ function drawView(){
 function frame(){
   // stabilisation : la pointe continue de rejoindre le stylet même s'il ne bouge plus
   if(stroking && !lineMode && st.stab>0 && raw) feed(raw.x,raw.y,raw.pr,performance.now());
-  if(stroking && flushStamps()){ composite(); dirtyShade=true; }
-  if(dirtyShade){ shade(stroking&&hasStamps?work:base, shadedFbo, false); dirtyShade=false; dirtyView=true; }
+  if(stroking) updateStroke();
+  if(dirtyShade){ shade(stroking?work:base, shadedFbo, false); dirtyShade=false; dirtyView=true; }
   if(dirtyView){ drawView(); dirtyView=false; }
   requestAnimationFrame(frame);
 }
