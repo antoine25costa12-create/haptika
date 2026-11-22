@@ -54,6 +54,10 @@
   #toggle{position:fixed;left:10px;bottom:10px;display:none}
   #panel.hidden + #toggle{display:block}
   #msg{position:fixed;right:14px;bottom:12px;color:var(--mute);font-size:12px;pointer-events:none}
+  .cross{position:fixed;width:44px;height:44px;margin:-22px 0 0 -22px;pointer-events:none;display:none;z-index:5}
+  .cross:before,.cross:after{content:"";position:absolute;background:currentColor}
+  .cross:before{left:21px;top:0;width:2px;height:44px}.cross:after{top:21px;left:0;height:2px;width:44px}
+  #diag{position:fixed;right:10px;top:10px;background:rgba(0,0,0,.78);color:#dfe;font:11px/1.45 ui-monospace,monospace;padding:8px 10px;border-radius:8px;white-space:pre;display:none;z-index:6;pointer-events:none}
   #err{position:fixed;inset:0;display:none;place-items:center;background:#111;color:#eee;padding:30px;text-align:center}
 </style>
 </head>
@@ -62,7 +66,7 @@
 
 <div id="panel">
   <div class="head"><h1>Haptika</h1><button id="hide" title="Masquer le panneau (Tab)">Masquer</button></div>
-  <div class="sub">Peinture en relief. Chaque trait a une hauteur.</div>
+  <div class="sub">Peinture en relief. Chaque trait a une hauteur. <span id="ver" style="opacity:.6">v4</span></div>
 
   <div class="lab">Matière</div>
   <div class="grid" id="mats"></div>
@@ -133,6 +137,7 @@
     <div class="grid two" style="margin-top:5px">
       <button id="png">Export PNG</button><button id="jpg">Export JPG</button>
     </div>
+    <button id="diagbtn" style="width:100%;margin-top:5px">Test du stylet</button>
     <div class="keys">
       <kbd>[</kbd> <kbd>]</kbd> taille · <kbd>Maj</kbd> ligne droite · <kbd>Espace</kbd> pinceau au hasard<br>
       <kbd>Ctrl Z</kbd> / <kbd>Ctrl Y</kbd> · molette zoom · clic droit glisser = déplacer<br>
@@ -143,6 +148,9 @@
 </div>
 <button id="toggle">Panneau</button>
 <div id="msg"></div>
+<div class="cross" id="crossIn" style="color:#22e07a"></div>
+<div class="cross" id="crossOut" style="color:#ff3b6b"></div>
+<div id="diag"></div>
 <div id="err"></div>
 
 <script>
@@ -167,10 +175,14 @@ function fitCanvas(){
 }
 // pixels du tampon par pixel CSS, mesurés séparément en largeur et en hauteur
 // (mesuré à chaque appel : la position du canvas peut bouger avec la barre d'état ou la rotation)
-const kx=()=>canvas.width/Math.max(1,canvas.getBoundingClientRect().width);
-const ky=()=>canvas.height/Math.max(1,canvas.getBoundingClientRect().height);
+// taille RÉELLE du tampon WebGL (le navigateur peut en donner une plus petite que celle demandée)
+const bufW=()=>gl.drawingBufferWidth||canvas.width, bufH=()=>gl.drawingBufferHeight||canvas.height;
+const kx=()=>bufW()/Math.max(1,canvas.getBoundingClientRect().width);
+const ky=()=>bufH()/Math.max(1,canvas.getBoundingClientRect().height);
 function clientToGL(cx,cy){ const r=canvas.getBoundingClientRect();
-  return [(cx-r.left)*canvas.width/Math.max(1,r.width), (r.bottom-cy)*canvas.height/Math.max(1,r.height)]; }
+  return [(cx-r.left)*bufW()/Math.max(1,r.width), (r.bottom-cy)*bufH()/Math.max(1,r.height)]; }
+function glToClient(gx,gy){ const r=canvas.getBoundingClientRect();
+  return [r.left+gx*r.width/bufW(), r.bottom-gy*r.height/bufH()]; }
 
 // document size: screen sized, capped
 const MAXDOC = 2400;
@@ -505,7 +517,7 @@ function shade(surf, target, transparent, rect){
   scissor(null);
 }
 function drawView(){
-  gl.bindFramebuffer(gl.FRAMEBUFFER,null); gl.viewport(0,0,canvas.width,canvas.height);
+  gl.bindFramebuffer(gl.FRAMEBUFFER,null); gl.viewport(0,0,bufW(),bufH());
   gl.useProgram(P_VIEW.p); bindTex(0,shadedTex); gl.uniform1i(P_VIEW.u.uImg,0);
   gl.uniform2f(P_VIEW.u.uOff,view.ox,view.oy); gl.uniform1f(P_VIEW.u.uScale,view.s); gl.uniform2f(P_VIEW.u.uDocF,W,H);
   gl.bindVertexArray(emptyVAO); gl.drawArrays(gl.TRIANGLES,0,3);
@@ -520,8 +532,8 @@ function frame(){
 }
 
 // ---------------------------------------------------------------- view & input
-function resetView(){ const s=Math.min(canvas.width/W, canvas.height/H);
-  view={s, ox:(canvas.width-W*s)/2, oy:(canvas.height-H*s)/2}; dirtyView=true; }
+function resetView(){ const s=Math.min(bufW()/W, bufH()/H);
+  view={s, ox:(bufW()-W*s)/2, oy:(bufH()-H*s)/2}; dirtyView=true; }
 function screenGL(e){ return clientToGL(e.clientX,e.clientY); }
 function toDoc(e){ const [sx,sy]=screenGL(e); return [(sx-view.ox)/view.s, (sy-view.oy)/view.s]; }
 
@@ -771,6 +783,35 @@ requestAnimationFrame(frame);
 if('serviceWorker' in navigator && location.protocol!=='file:'){
   navigator.serviceWorker.register('sw.js').catch(err=>console.warn('Service worker non enregistré :',err.message));
 }
+// ---------------------------------------------------------------- diagnostic du stylet
+// croix verte = position donnée par le navigateur ; croix rose = où l'outil va dessiner
+let diagOn=false;
+$('diagbtn').onclick=()=>{ diagOn=!diagOn; $('diagbtn').classList.toggle('on',diagOn);
+  for(const id of ['crossIn','crossOut','diag']) $(id).style.display=diagOn?'block':'none';
+  if(diagOn) diagUpdate(null); };
+function diagUpdate(e){
+  const r=canvas.getBoundingClientRect(), vv=window.visualViewport;
+  const lines=[
+    'version      v4',
+    'app installée '+(navigator.standalone||matchMedia('(display-mode: standalone)').matches||matchMedia('(display-mode: fullscreen)').matches?'oui':'non'),
+    `fenêtre      ${innerWidth} × ${innerHeight}  (dpr ${devicePixelRatio})`,
+    vv?`visualVP     ${vv.width.toFixed(0)} × ${vv.height.toFixed(0)}  top ${vv.offsetTop.toFixed(0)}  zoom ${vv.scale.toFixed(2)}`:'visualVP     -',
+    `canvas CSS   ${r.left.toFixed(1)},${r.top.toFixed(1)}  ${r.width.toFixed(1)} × ${r.height.toFixed(1)}`,
+    `canvas px    ${canvas.width} × ${canvas.height}`,
+    `tampon GL    ${gl.drawingBufferWidth} × ${gl.drawingBufferHeight}`,
+    `scroll       ${scrollX} , ${scrollY}`
+  ];
+  if(e){
+    const [dx,dy]=toDoc(e); const [gx,gy]=[dx*view.s+view.ox, dy*view.s+view.oy]; const [ox,oy]=glToClient(gx,gy);
+    $('crossIn').style.left=e.clientX+'px'; $('crossIn').style.top=e.clientY+'px';
+    $('crossOut').style.left=ox+'px'; $('crossOut').style.top=oy+'px';
+    lines.push(`pointeur     ${e.pointerType}  ${e.clientX.toFixed(1)} , ${e.clientY.toFixed(1)}`);
+    lines.push(`écran/page   ${e.screenX.toFixed(0)},${e.screenY.toFixed(0)} / ${e.pageX.toFixed(0)},${e.pageY.toFixed(0)}`);
+    lines.push(`dessin à     ${ox.toFixed(1)} , ${oy.toFixed(1)}`);
+  }
+  $('diag').textContent=lines.join(String.fromCharCode(10));
+}
+for(const t of ['pointerdown','pointermove']) canvas.addEventListener(t,e=>{ if(diagOn) diagUpdate(e); },{passive:true});
 window.__haptika={get st(){return st}, W, H};
 </script>
 </body>
