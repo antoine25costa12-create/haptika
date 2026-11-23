@@ -59,7 +59,8 @@
   .cross:before{left:21px;top:0;width:2px;height:44px}.cross:after{top:21px;left:0;height:2px;width:44px}
   #diag{position:fixed;right:10px;top:10px;background:rgba(0,0,0,.78);color:#dfe;font:11px/1.45 ui-monospace,monospace;padding:8px 10px;border-radius:8px;white-space:pre;display:none;z-index:6;pointer-events:none}
   .vh{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;pointer-events:none}
-  label.btn{display:block}
+  .filebtn{position:relative;overflow:hidden;display:block}
+  .filebtn input{position:absolute;left:0;top:0;width:100%;height:100%;opacity:0;font-size:60px;cursor:pointer}
   #ov{position:fixed;left:0;top:0;width:100%;height:100%;pointer-events:none}
   .note{color:var(--mute);font-size:11px;line-height:1.45;margin-top:6px}
   #err{position:fixed;inset:0;display:none;place-items:center;background:#111;color:#eee;padding:30px;text-align:center}
@@ -71,7 +72,7 @@
 
 <div id="panel">
   <div class="head"><h1>Haptika</h1><button id="hide" title="Masquer le panneau (Tab)">Masquer</button></div>
-  <div class="sub">Peinture en relief. Chaque trait a une hauteur. <span id="ver" style="opacity:.6">v9</span></div>
+  <div class="sub">Peinture en relief. Chaque trait a une hauteur. <span id="ver" style="opacity:.6">v10</span></div>
 
   <div class="lab">Outil</div>
   <div class="grid two"><button id="toolDraw" class="on">Pinceau (B)</button><button id="toolSel">Sélection (V)</button></div>
@@ -107,8 +108,7 @@
     </div>
     <div class="row" style="grid-template-columns:78px 1fr 64px"><span>Plaque</span>
       <select id="sheet"><option value="0">Aucune</option><option value="1">Métal brossé</option><option value="2">Métal patiné</option><option value="3">Mon image</option></select>
-      <label for="texfile" class="btn" title="Choisir une image pour la plaque">Image…</label></div>
-    <input type="file" id="texfile" accept="image/*" class="vh">
+      <span class="btn filebtn" title="Choisir une image pour la plaque">Image…<input type="file" id="texfile" accept="image/*"></span></div>
     <div class="note" style="margin-top:0">Plaque : le fond devient une feuille que les traits emboutissent (matière « Plaque », ou mode Enfoncer). « Image… » : ta propre photo devient la plaque (métal, papier, cuir…).</div>
   </div>
 
@@ -151,12 +151,11 @@
   <div class="sec">
     <div class="lab">Esquisse en dessous</div>
     <div class="grid">
-      <label for="skfile" class="btn">Charger</label>
+      <span class="btn filebtn">Charger<input type="file" id="skfile" accept="image/*"></span>
       <button id="skmove" title="Déplacer l'esquisse (J)">Déplacer</button>
       <button id="skclear">Retirer</button>
     </div>
     <div class="row"><span>Opacité</span><input type="range" id="skop" min="0" max="100" value="45"><output></output></div>
-    <input type="file" id="skfile" accept="image/*" class="vh">
     <label class="check" style="margin-left:0"><input type="checkbox" id="skexp"> Inclure l'esquisse à l'export (dessiner sur une photo)</label>
   </div>
 
@@ -189,7 +188,7 @@
 
 <script>
 "use strict";
-const VERSION='v9';
+const VERSION='v10';
 // ---------------------------------------------------------------- setup
 const canvas = document.getElementById('c');
 const gl = canvas.getContext('webgl2', {antialias:false, alpha:false, premultipliedAlpha:false, desynchronized:true, powerPreference:'high-performance'});
@@ -827,17 +826,15 @@ function shade(c, surf, target, transparent, rect){
 }
 let sketchTex=texture(gl.RGBA8,1,1);
 let sheetTex=texture(gl.RGBA8,1,1), sheetSz=null;
-function loadSheet(file){
-  const img=new Image(); img.onload=()=>{
+function loadSheet(file){ readImage(file,(img,iw,ih)=>{
     gl.deleteTexture(sheetTex); sheetTex=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,sheetTex);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true); gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,img);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false); gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.MIRRORED_REPEAT); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.MIRRORED_REPEAT);
-    const k=Math.max(1,1600/Math.max(img.width,img.height)); sheetSz=[img.width*k,img.height*k];
-    st.sheet=3; $('sheet').value='3'; dirtyShade=true; URL.revokeObjectURL(img.src); toast('Texture de plaque chargée');
-  }; img.src=URL.createObjectURL(file);
-}
+    const k=Math.max(1,1600/Math.max(iw,ih)); sheetSz=[iw*k,ih*k];
+    st.sheet=3; $('sheet').value='3'; dirtyShade=true; toast(`Plaque : ta photo est chargée (${iw} × ${ih})`);
+  }); }
 function drawView(){
   gl.bindFramebuffer(gl.FRAMEBUFFER,null); gl.viewport(0,0,bufW(),bufH());
   gl.useProgram(P_VIEW.p); bindTex(0,MC.shTex); const u=P_VIEW.u; gl.uniform1i(u.uImg,0);
@@ -1091,19 +1088,37 @@ function exportImage(kind){
   dirtyShade=true;
 }
 
-// ---------------------------------------------------------------- esquisse
-function loadSketch(file){
-  const img=new Image(); img.onload=()=>{
+// ---------------------------------------------------------------- images (esquisse, plaque)
+// lit une photo (les photos de l'iPad sont converties en JPEG par Safari), la réduit à 2048 px au plus,
+// puis appelle done(source, largeur, hauteur) ; un message s'affiche à chaque étape
+function readImage(file, done){
+  if(!file){ toast("Aucune image reçue"); return; }
+  toast("Chargement de l'image…");
+  const url=URL.createObjectURL(file), img=new Image();
+  img.onerror=()=>{ URL.revokeObjectURL(url); toast("Cette image n'a pas pu être lue ("+(file.type||'format inconnu')+")"); };
+  img.onload=()=>{
+    try{
+      let src=img, w=img.naturalWidth||img.width, h=img.naturalHeight||img.height;
+      if(!w||!h) throw new Error('taille nulle');
+      const m=2048/Math.max(w,h);
+      if(m<1){ const cv=document.createElement('canvas'); cv.width=Math.round(w*m); cv.height=Math.round(h*m);
+        cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height); src=cv; w=cv.width; h=cv.height; }
+      done(src,w,h);
+    }catch(err){ toast("Erreur avec cette image : "+err.message); }
+    URL.revokeObjectURL(url);
+  };
+  img.src=url;
+}
+function loadSketch(file){ readImage(file,(img,iw,ih)=>{
     gl.deleteTexture(sketchTex); sketchTex=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,sketchTex);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true); gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,img);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
     const vw=bufW()/view.s, vh=bufH()/view.s, [cx,cy]=viewCenter();
-    const k=Math.min(vw/img.width,vh/img.height)*0.9, w=img.width*k, h=img.height*k;
-    sketch={rect:[cx-w/2,cy-h/2,w,h]}; dirtyShade=true; URL.revokeObjectURL(img.src);
-  }; img.src=URL.createObjectURL(file);
-}
+    const k=Math.min(vw/iw,vh/ih)*0.9, w=iw*k, h=ih*k;
+    sketch={rect:[cx-w/2,cy-h/2,w,h]}; dirtyShade=true; toast(`Esquisse chargée (${iw} × ${ih})`);
+  }); }
 
 // ---------------------------------------------------------------- UI
 const $=id=>document.getElementById(id);

@@ -1,6 +1,6 @@
 // Haptika — service worker : met l'outil en cache pour qu'il marche sans connexion.
 // Changer VERSION à chaque mise à jour pour que les appareils récupèrent la nouvelle version.
-const VERSION = 'haptika-v9';
+const VERSION = 'haptika-v10';
 const FILES = [
   './',
   './index.html',
