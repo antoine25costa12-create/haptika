@@ -69,7 +69,7 @@
 
 <div id="panel">
   <div class="head"><h1>Haptika</h1><button id="hide" title="Masquer le panneau (Tab)">Masquer</button></div>
-  <div class="sub">Peinture en relief. Chaque trait a une hauteur. <span id="ver" style="opacity:.6">v5</span></div>
+  <div class="sub">Peinture en relief. Chaque trait a une hauteur. <span id="ver" style="opacity:.6">v6</span></div>
 
   <div class="lab">Outil</div>
   <div class="grid two"><button id="toolDraw" class="on">Pinceau (B)</button><button id="toolSel">Sélection (V)</button></div>
@@ -78,6 +78,12 @@
     <div class="note">Touche un trait pour le choisir (Maj : en ajouter), glisse pour le déplacer, ou trace un rectangle autour de plusieurs.
       Tant que des traits sont choisis, la matière, le profil, le mode, la couleur et les réglages du pinceau s'appliquent à eux.</div>
   </div>
+
+  <div class="sec"><div class="lab">Pinceaux prêts</div><div class="grid" id="recipes"></div></div>
+
+  <div class="sec"><div class="lab">Forme du pinceau</div><div class="grid" id="kinds"></div>
+    <div class="note">Perles, épines, barbelé, laurier et branches poussent tout seuls le long de la ligne.
+      Mousse et sable réagissent à la vitesse : lentement, la matière gonfle (bulles, gouttes de sable) ; vite, elle reste légère.</div></div>
 
   <div class="sec"><div class="lab">Matière</div>
   <div class="grid" id="mats"></div></div>
@@ -104,6 +110,7 @@
     <div class="row"><span>Taille</span><input type="range" id="size" min="3" max="220" value="38"><output></output></div>
     <div class="row"><span>Stabilisation</span><input type="range" id="stab" min="0" max="100" value="0"><output></output></div>
     <label class="check"><input type="checkbox" id="stabend" checked> finir au point levé</label>
+    <div class="row"><span>Lenteur épaissit</span><input type="range" id="speedk" min="0" max="100" value="0"><output></output></div>
     <div class="row"><span>Hauteur</span><input type="range" id="height" min="5" max="150" value="60"><output></output></div>
     <div class="row"><span>Bord rugueux</span><input type="range" id="rough" min="0" max="100" value="10"><output></output></div>
     <div class="row"><span>Chaos</span><input type="range" id="chaos" min="0" max="100" value="0"><output></output></div>
@@ -174,7 +181,7 @@
 
 <script>
 "use strict";
-const VERSION='v5';
+const VERSION='v6';
 // ---------------------------------------------------------------- setup
 const canvas = document.getElementById('c');
 const gl = canvas.getContext('webgl2', {antialias:false, alpha:false, premultipliedAlpha:false, desynchronized:true, powerPreference:'high-performance'});
@@ -223,16 +230,18 @@ layout(location=0) in vec3 aS;
 uniform vec2 uDoc;
 out vec2 vP; flat out float vR;
 const vec2 Q[6]=vec2[6](vec2(-1,-1),vec2(1,-1),vec2(-1,1),vec2(-1,1),vec2(1,-1),vec2(1,1));
-void main(){ vec2 q=Q[gl_VertexID]; float R=aS.z+1.5; vP=q*R; vR=aS.z;
+void main(){ vec2 q=Q[gl_VertexID]; float R=abs(aS.z)+1.5; vP=q*R; vR=aS.z;
   gl_Position=vec4((aS.xy+q*R)/uDoc*2.-1.,0,1); }`;
 const FS_STAMP = `#version 300 es
 precision highp float;
 in vec2 vP; flat in float vR; uniform float uSize; out vec4 o;
-void main(){ float v=(vR-length(vP))/uSize; if(v<=-1.5/uSize) discard; o=vec4(max(v,0.0001),0,0,1); }`;
+// rayon négatif = tampon « creux » (pinceau poreux) : écrit dans le canal g au lieu de r
+void main(){ float v=(abs(vR)-length(vP))/uSize; if(v<=-1.5/uSize) discard;
+  o = vR<0. ? vec4(0,max(v,0.0001),0,1) : vec4(max(v,0.0001),0,0,1); }`;
 
 const FS_COMP = `#version 300 es
 precision highp float;
-uniform sampler2D uBH,uBC,uS;
+uniform sampler2D uBH,uBC,uS,uCutT; uniform float uCut;
 uniform int uMode,uProf; uniform vec3 uCol; uniform vec2 uOrg;
 uniform float uMat,uHeight,uSize,uSizeW,uRough,uGrain,uRibs,uSeed,uK;
 layout(location=0) out vec4 oH; layout(location=1) out vec4 oC;
@@ -241,7 +250,7 @@ float smax(float a,float b,float k){ float h=max(k-abs(a-b),0.)/k; return max(a,
 void main(){
   ivec2 ip=ivec2(gl_FragCoord.xy); vec2 wp=gl_FragCoord.xy/uK+uOrg;
   vec4 bh=texelFetch(uBH,ip,0), bc=texelFetch(uBC,ip,0);
-  float v=texelFetch(uS,ip,0).r;
+  vec4 sv=texelFetch(uS,ip,0); float v=sv.r, cut=uCut>0.5 ? texelFetch(uCutT,ip,0).g : 0.;
   if(v<=0.){ oH=bh; oC=bc; return; }
   float t=v - uRough*0.32*fbm(wp/(max(uSizeW,6.)*0.3)+uSeed*3.7);
   t=clamp(t,0.,1.);
@@ -255,6 +264,7 @@ void main(){
   else p=pow(d,0.4);                                    // perle
   float s=uHeight*p*cov;
   s += uGrain*uHeight*0.16*(fbm(wp*0.07+uSeed*7.)-0.47)*cov;
+  if(cut>0.) s -= uHeight*1.15*pow(min(1.,cut*3.),0.55)*cov;   // alvéoles sphériques
   float hb=bh.r, ca=bc.a, m=bh.g, sd=bh.b;
   vec3 cb = ca<0.01 ? uCol : bc.rgb;
   float h=hb; vec3 c=cb; float a=ca;
@@ -459,7 +469,7 @@ const PROFS=['Dôme','Arête','Nervures','Plat','Perle'];
 const MODES=['Fusion','Empiler','Recouvrir','Enfoncer','Gomme'];
 const DEFAULT_COLS=['#c8643b','#d9a441','#7d9a72','#2f4fa8','#e8a7a0','#2f8f8a','#ece4d4','#1d1d22'];
 const st={ mat:0, prof:0, mode:0, color:'#c8643b', bg:'#e9e4da', tool:'draw',
-  size:38, stab:0, stabEnd:true, height:0.6, rough:0.1, chaos:0, grain:0.15, ribs:5, dot:6, uni:false, arr:1.5,
+  size:38, stab:0, stabEnd:true, kind:0, speedk:0, height:0.6, rough:0.1, chaos:0, grain:0.15, ribs:5, dot:6, uni:false, arr:1.5,
   az:135, el:38, relief:1, rim:0.2, sym:0, symn:6, skop:0.45, exp:2 };
 const store={ get(k,d){ try{ return JSON.parse(localStorage.getItem(k))??d; }catch(_){ return d; } },
   set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(_){} } };
@@ -477,10 +487,94 @@ function hex2rgb(h){ const n=parseInt(h.slice(1),16); return [(n>>16&255)/255,(n
 let strokes=[], sid=0;
 const hist=[], fut=[];
 const sel=new Set();
+// chaque échantillon de la ligne tracée : x, y, rayon, lenteur du geste (0 = rapide, 1 = lent)
+const PS=4;
+// formes de pinceau : la ligne tracée sert de colonne vertébrale, le reste est recalculé à partir d'elle
+const KINDS=['Trait','Perles','Épines','Barbelé','Laurier','Branches','Mousse','Sable','Poreux'];
+const KEXT=[0,0,1.8,1.2,2.8,7,1.4,1.8,0];   // débordement maximal, en tailles de pinceau
 function strokeBB(s){ let b=[Infinity,Infinity,-Infinity,-Infinity];
-  for(const p of s.paths) for(let i=0;i<p.length;i+=3){ const r=p[i+2];
+  const ext=(KEXT[s.p.kind||0]||0)*s.p.size*(1+(s.p.speedk||0));
+  for(const p of s.paths) for(let i=0;i<p.length;i+=PS){ const r=p[i+2]*(1+(s.p.speedk||0))+ext;
     b[0]=Math.min(b[0],p[i]-r); b[1]=Math.min(b[1],p[i+1]-r); b[2]=Math.max(b[2],p[i]+r); b[3]=Math.max(b[3],p[i+1]+r); }
   return b; }
+function rng32(seed){ let a=(Math.floor(seed)>>>0)||1; return ()=>{ a^=a<<13; a>>>=0; a^=a>>>17; a^=a<<5; a>>>=0; return a/4294967296; }; }
+function makeGen(p,mir){ return {p, k:p.kind||0, R:rng32(p.seed*7919+13), s:0, px:null, py:null, tx:1, ty:0, has:false,
+  next:0, side:1, mir:mir?-1:1, n:0}; }
+// petite courbe effilée : départ (x,y), direction (dx,dy), courbure (bx,by), longueur L, rayon le long de u∈[0,1]
+function curveOut(out,x,y,dx,dy,bx,by,L,rad,minR){
+  const K=Math.max(4,Math.ceil(L/Math.max(minR*0.8,0.5)));
+  for(let i=0;i<=K;i++){ const u=i/K; out.push(x+dx*L*u+bx*L*u*u, y+dy*L*u+by*L*u*u, Math.max(rad(u),minR)); } }
+// ajoute à out les tampons [x,y,r] (r<0 : creux) produits par un échantillon de la ligne
+function genStep(G,x,y,r,w,out){
+  const p=G.p, S=p.size, R=G.R;
+  r*=1+(p.speedk||0)*w;
+  if(G.px!==null){ const dx=x-G.px, dy=y-G.py, d=Math.hypot(dx,dy);
+    if(d>1e-6){ const a=Math.min(1,d/(S*0.35)); G.tx+=(dx/d-G.tx)*a; G.ty+=(dy/d-G.ty)*a;
+      const l=Math.hypot(G.tx,G.ty)||1; G.tx/=l; G.ty/=l; G.has=true; }
+    G.s+=d; }
+  G.px=x; G.py=y; G.n++;
+  const tx=G.tx, ty=G.ty, nx=-ty*G.mir, ny=tx*G.mir, mr=Math.max(S*0.03,0.4);
+  switch(G.k){
+    case 0: out.push(x,y,r); break;
+    case 1: // perles enfilées
+      if(G.s>=G.next){ out.push(x,y,r); G.next=G.s+r*2.05; } break;
+    case 2: { // épines de rosier, en alternance, recourbées vers l'arrière
+      out.push(x,y,r*0.42);
+      if(G.has && G.s>=G.next){ const sd=G.side, L=S*(1.1+R()*0.5), rb=r*0.5;
+        let dx=nx*sd-tx*0.55, dy=ny*sd-ty*0.55; const l=Math.hypot(dx,dy); dx/=l; dy/=l;
+        curveOut(out, x+nx*sd*r*0.25, y+ny*sd*r*0.25, dx,dy, -tx*0.45,-ty*0.45, L, u=>rb*Math.pow(1-u,1.4), mr);
+        G.side=-sd; G.next=G.s+S*(1.5+R()*1.3); }
+      else if(!G.next) G.next=S*0.6;
+      break; }
+    case 3: { // barbelé : deux brins torsadés et des lames à intervalles réguliers
+      const ph=G.s/(S*0.85)*Math.PI, o=Math.cos(ph)*r*0.3, rr=Math.max(r*0.2,mr);
+      out.push(x+nx*o,y+ny*o,rr, x-nx*o,y-ny*o,rr);
+      if(G.has && G.s>=G.next){ const L=S*(0.85+R()*0.25);
+        for(const a of [0.95,-0.95,Math.PI-0.95,Math.PI+0.95]){ const c=Math.cos(a), sn=Math.sin(a);
+          const dx=tx*c+nx*sn, dy=ty*c+ny*sn;
+          curveOut(out,x,y,dx,dy,0,0,L,u=>r*0.17*Math.pow(1-u,1.1),mr); }
+        G.next=G.s+S*(2.2+R()*0.5); }
+      else if(!G.next) G.next=S*0.9;
+      break; }
+    case 4: { // laurier : tige fine, feuilles par paires
+      out.push(x,y,Math.max(r*0.17,mr));
+      if(G.has && G.s>=G.next){
+        for(const sd of [1,-1]){ const L=S*(1.7+R()*0.6);
+          let dx=tx*0.72+nx*sd*0.7, dy=ty*0.72+ny*sd*0.7; const l=Math.hypot(dx,dy); dx/=l; dy/=l;
+          curveOut(out,x,y,dx,dy,(tx*0.3-nx*sd*0.22),(ty*0.3-ny*sd*0.22),L,u=>r*0.5*Math.pow(Math.sin(Math.PI*Math.min(1,u*1.05)),0.75),mr); }
+        G.next=G.s+S*(0.9+R()*0.35); }
+      else if(!G.next) G.next=S*0.5;
+      break; }
+    case 5: { // branches : l'écorce suit la ligne, des rameaux poussent sur les côtés
+      out.push(x,y,r);
+      if(G.has && G.s>=G.next){ const sd=G.side, a=0.7+R()*0.4, L=S*(2.8+R()*2.8);
+        const dx=tx*Math.cos(a)+nx*sd*Math.sin(a), dy=ty*Math.cos(a)+ny*sd*Math.sin(a);
+        const bx=tx*0.12, by=ty*0.12, r0=r*0.6;
+        curveOut(out,x,y,dx,dy,bx,by,L,u=>r0*(1-0.88*Math.pow(u,0.9)),mr);
+        if(R()<0.55){ const u=0.5+R()*0.2, qx=x+dx*L*u+bx*L*u*u, qy=y+dy*L*u+by*L*u*u;
+          let ex=dx+2*bx*u, ey=dy+2*by*u; const el=Math.hypot(ex,ey); ex/=el; ey/=el;
+          const b2=0.7*(R()<0.5?1:-1), c=Math.cos(b2), sn=Math.sin(b2);
+          curveOut(out,qx,qy,ex*c-ey*sn,ex*sn+ey*c,ex*0.2,ey*0.2,L*0.45,u2=>r0*(1-0.88*u)*0.7*(1-0.85*u2),mr); }
+        G.side=R()<0.75?-sd:sd; G.next=G.s+S*(1.8+R()*2.2); }
+      else if(!G.next) G.next=S*0.8;
+      break; }
+    case 6: { // mousse : lisse quand on va vite, bulles quand on ralentit
+      const rr=r*(1+0.4*w); out.push(x,y,rr*0.8);
+      if(R()<w*0.45){ const a=R()*6.283, d=R()*rr*0.9;
+        out.push(x+Math.cos(a)*d,y+Math.sin(a)*d,rr*(0.18+R()*0.3)*(0.6+w*0.5)); }
+      break; }
+    case 7: { // sable : des grains qui se dispersent vite et s'agglomèrent en goutte lentement
+      if(R()<0.8){ const n=1+Math.floor(w*3+R()*1.5), spread=r*(1.5-1.1*w);
+        for(let i=0;i<n;i++){ const gx=(R()+R()+R()-1.5)*spread, gy=(R()+R()+R()-1.5)*spread;
+          out.push(x+gx,y+gy,Math.max(S*(0.045+R()*0.07),mr)); } }
+      if(w>0.5) out.push(x,y,r*0.6*(w-0.5)/0.5);
+      break; }
+    case 8: { // poreux : une masse creusée d'alvéoles sphériques
+      out.push(x,y,r);
+      if(R()<0.2){ const a=R()*6.283, d=R()*r*0.8; out.push(x+Math.cos(a)*d,y+Math.sin(a)*d,-r*(0.14+R()*0.26)); }
+      break; }
+  }
+}
 const worldBB=s=>[s.bb[0]+s.dx,s.bb[1]+s.dy,s.bb[2]+s.dx,s.bb[3]+s.dy];
 function sameGroup(a,b){ const p=a.p,q=b.p; return p.uni&&q.uni&&p.mat===q.mat&&p.color===q.color&&p.mode===q.mode&&p.prof===q.prof&&p.arr===q.arr; }
 function pushHist(){ hist.push(strokes.slice()); if(hist.length>300) hist.shift(); fut.length=0; }
@@ -492,10 +586,12 @@ function gparams(p,c){
   const edge = p.uni ? p.size*p.arr : p.size;
   return { mode:p.mode, prof:p.prof, mat:p.mat, col:hex2rgb(p.color), size:Math.max(0.5,edge*c.k), sizeW:p.size,
     height:p.height*p.size*c.k*(p.uni?Math.sqrt(p.arr):1), rough:p.rough, grain:p.grain, ribs:p.ribs, seed:p.seed, edgePx:edge*c.k }; }
-function stampsOf(s,c,out){ const k=c.k;
-  for(const p of s.paths) for(let i=0;i<p.length;i+=3) out.push((p[i]+s.dx-c.x0)*k,(p[i+1]+s.dy-c.y0)*k,p[i+2]*k); }
+function stampsOf(s,c,out){ const k=c.k, tmp=[];
+  s.paths.forEach((p,j)=>{ const G=makeGen(s.p,s.mir&&s.mir[j]);
+    for(let i=0;i<p.length;i+=PS){ tmp.length=0; genStep(G,p[i]+s.dx,p[i+1]+s.dy,p[i+2],p[i+3],tmp);
+      for(let m=0;m<tmp.length;m+=3) out.push((tmp[m]-c.x0)*k,(tmp[m+1]-c.y0)*k,tmp[m+2]*k); } }); }
 function rectOf(a){ const r=[Infinity,Infinity,-Infinity,-Infinity];
-  for(let i=0;i<a.length;i+=3){ const x=a[i],y=a[i+1],m=a[i+2]+3;
+  for(let i=0;i<a.length;i+=3){ const x=a[i],y=a[i+1],m=Math.abs(a[i+2])+3;
     if(x-m<r[0])r[0]=x-m; if(y-m<r[1])r[1]=y-m; if(x+m>r[2])r[2]=x+m; if(y+m>r[3])r[3]=y+m; }
   return r[0]===Infinity?null:r; }
 function drawStamps(c,arr,sizePx){ if(!arr.length) return;
@@ -509,8 +605,8 @@ function clearStroke(c,r){ gl.bindFramebuffer(gl.FRAMEBUFFER,c.sFbo); scissor(r)
 function composite(c,src,rect,g,vTex){
   gl.bindFramebuffer(gl.FRAMEBUFFER,c.work.f); gl.viewport(0,0,c.W,c.H);
   gl.useProgram(P_COMP.p); const u=P_COMP.u;
-  bindTex(0,src.h); bindTex(1,src.c); bindTex(2,vTex);
-  gl.uniform1i(u.uBH,0); gl.uniform1i(u.uBC,1); gl.uniform1i(u.uS,2);
+  bindTex(0,src.h); bindTex(1,src.c); bindTex(2,vTex); bindTex(3,c.sTex);
+  gl.uniform1i(u.uBH,0); gl.uniform1i(u.uBC,1); gl.uniform1i(u.uS,2); gl.uniform1i(u.uCutT,3); gl.uniform1f(u.uCut,1);
   gl.uniform1i(u.uMode,g.mode); gl.uniform1i(u.uProf,g.prof); gl.uniform3fv(u.uCol,g.col);
   gl.uniform1f(u.uMat,g.mat); gl.uniform1f(u.uHeight,g.height); gl.uniform1f(u.uSize,g.size); gl.uniform1f(u.uSizeW,g.sizeW);
   gl.uniform1f(u.uRough,g.rough); gl.uniform1f(u.uGrain,g.grain); gl.uniform1f(u.uRibs,g.ribs); gl.uniform1f(u.uSeed,g.seed);
@@ -569,13 +665,17 @@ function viewChanged(){ dirtyView=true; dirtyOv=true; requestRender(140); }
 // ---------------------------------------------------------------- trait en cours
 let stroking=false, cur=null, live=null, pending=[], last=null, lastEnd=null, sp=null;
 function strokeParams(){ return { mode:st.mode, prof:st.prof, mat:st.mat, color:st.color, size:st.size, height:st.height,
-  rough:st.rough, chaos:st.chaos, grain:st.grain, ribs:st.ribs, uni:st.uni, arr:st.arr, seed:Math.random()*100 }; }
+  rough:st.rough, chaos:st.chaos, grain:st.grain, ribs:st.ribs, uni:st.uni, arr:st.arr, kind:st.kind, speedk:st.speedk,
+  seed:Math.random()*100 }; }
+// copies de symétrie qui sont des reflets (les épines, feuilles… doivent pousser du côté reflété)
+function mirFlags(){ return st.sym===1||st.sym===2 ? [0,1] : st.sym===3 ? [0,1,1,0] : st.sym===4 ? Array(st.symn).fill(0) : [0]; }
 function beginStroke(){
   if(needRender || !MC) renderMain();
   const c=MC, p=strokeParams();
   const n = st.sym===0?1 : st.sym===3?4 : st.sym===4?st.symn : 2;
-  cur={id:++sid, p, paths:Array.from({length:n},()=>[]), dx:0, dy:0, bb:null};
-  sp=p; pending=[]; live={c, uni:p.uni, grect:null};
+  const mir=mirFlags();
+  cur={id:++sid, p, paths:Array.from({length:n},()=>[]), mir, dx:0, dy:0, bb:null};
+  sp=p; pending=[]; live={c, uni:p.uni, grect:null, gens:cur.paths.map((_,i)=>makeGen(p,mir[i]))};
   clearStroke(c,null);
   if(p.uni){
     ensureUni(c);
@@ -599,7 +699,8 @@ function beginStroke(){
 function uniUpdate(r){ const c=live.c, e=live.g.edgePx;
   const cr=clipR(c,growR(r,e+3)), jr=clipR(c,growR(r,2*e+6)); if(!cr) return null;
   jfa(c,jr,e); composite(c,live.src,cr,live.g,c.uTex); return cr; }
-function pushStamp(x,y,r){
+const genTmp=[];
+function pushStamp(x,y,r,w){
   if(sp.chaos>0){ const a=Math.random()*6.283, j=Math.random()*sp.chaos*r*0.45;
     x+=Math.cos(a)*j; y+=Math.sin(a)*j; r*=1-sp.chaos*0.45*Math.random(); }
   const [cx,cy]=symC, out=[[x,y]];
@@ -609,17 +710,27 @@ function pushStamp(x,y,r){
   if(st.sym===4){ const n=st.symn, dx=x-cx, dy=y-cy;
     for(let k=1;k<n;k++){ const a=k*2*Math.PI/n, c=Math.cos(a), s=Math.sin(a); out.push([cx+dx*c-dy*s, cy+dx*s+dy*c]); } }
   const c=live.c;
-  out.forEach((q,i)=>{ if(cur.paths[i]) cur.paths[i].push(q[0],q[1],r); pending.push((q[0]-c.x0)*c.k,(q[1]-c.y0)*c.k,r*c.k); });
+  w=Math.round(w*100)/100;
+  out.forEach((q,i)=>{ if(!cur.paths[i]) return; cur.paths[i].push(q[0],q[1],r,w);
+    genTmp.length=0; genStep(live.gens[i],q[0],q[1],r,w,genTmp);
+    for(let m=0;m<genTmp.length;m+=3) pending.push((genTmp[m]-c.x0)*c.k,(genTmp[m+1]-c.y0)*c.k,genTmp[m+2]*c.k); });
 }
+// lenteur du geste : 1 quand on trace lentement, 0 quand on va vite (relative à la taille du pinceau)
+let slowW=0, spd=null;
+function trackSpeed(x,y,t){
+  if(spd && t>spd.t){ const v=Math.hypot(x-spd.x,y-spd.y)/(t-spd.t); spd.v=spd.v*0.75+v*0.25; }
+  else if(!spd) spd={v:0.02*st.size};
+  spd.x=x; spd.y=y; spd.t=t;
+  const q=spd.v/Math.max(1,st.size); slowW=1-Math.min(1,Math.max(0,(q-0.004)/0.05)); }
 function addPoint(x,y,pr){
-  const r=Math.max(0.6/live.c.k, sp.size*(0.15+0.85*pr));
-  if(!last){ pushStamp(x,y,r); last={x,y,r}; return; }
+  const r=Math.max(0.6/live.c.k, sp.size*(0.15+0.85*pr)), w=lineMode?0:slowW;
+  if(!last){ pushStamp(x,y,r,w); last={x,y,r,w}; return; }
   const dx=x-last.x, dy=y-last.y, dist=Math.hypot(dx,dy);
   const spacing=Math.max(0.6/live.c.k, Math.min(r,last.r)*0.12);
   if(dist<spacing) return;
   const n=Math.ceil(dist/spacing);
-  for(let i=1;i<=n;i++){ const t=i/n; pushStamp(last.x+dx*t, last.y+dy*t, last.r+(r-last.r)*t); }
-  last={x,y,r};
+  for(let i=1;i<=n;i++){ const t=i/n; pushStamp(last.x+dx*t, last.y+dy*t, last.r+(r-last.r)*t, last.w+(w-last.w)*t); }
+  last={x,y,r,w};
 }
 function updateStroke(){
   if(!pending.length) return;
@@ -680,6 +791,7 @@ function drawView(){
 }
 function frame(){
   if(stroking && !lineMode && st.stab>0 && raw) feed(raw.x,raw.y,raw.pr,performance.now());
+  if(stroking && spd && performance.now()-spd.t>40){ spd.v*=0.85; trackSpeed(spd.x,spd.y,spd.t); }
   if(stroking) updateStroke();
   if(!stroking && needRender && performance.now()>=needRender) renderMain();
   if(dirtyShade && MC){ shade(MC, stroking?MC.work:MC.base, MC.shFbo, false); dirtyShade=false; dirtyView=true; }
@@ -709,15 +821,15 @@ function drawOverlay(){
 function hitTest(x,y){ const tol=8*dpr/view.s;
   for(let i=strokes.length-1;i>=0;i--){ const s=strokes[i], b=worldBB(s);
     if(x<b[0]-tol||x>b[2]+tol||y<b[1]-tol||y>b[3]+tol) continue;
-    for(const p of s.paths) for(let j=0;j<p.length;j+=3){ const dx=p[j]+s.dx-x, dy=p[j+1]+s.dy-y, r=p[j+2]+tol;
+    for(const p of s.paths) for(let j=0;j<p.length;j+=PS){ const dx=p[j]+s.dx-x, dy=p[j+1]+s.dy-y, r=p[j+2]+tol;
       if(dx*dx+dy*dy<r*r) return s; } }
   return null; }
 function selectInRect(r){ const x0=Math.min(r[0],r[2]),x1=Math.max(r[0],r[2]),y0=Math.min(r[1],r[3]),y1=Math.max(r[1],r[3]);
   for(const s of strokes){ const b=worldBB(s); if(b[2]<x0||b[0]>x1||b[3]<y0||b[1]>y1) continue;
-    let hit=false; for(const p of s.paths){ for(let j=0;j<p.length;j+=3){ const x=p[j]+s.dx,y=p[j+1]+s.dy;
+    let hit=false; for(const p of s.paths){ for(let j=0;j<p.length;j+=PS){ const x=p[j]+s.dx,y=p[j+1]+s.dy;
       if(x>=x0&&x<=x1&&y>=y0&&y<=y1){ hit=true; break; } } if(hit) break; }
     if(hit) sel.add(s.id); } }
-const EDIT_KEYS=new Set(['mat','prof','mode','color','size','height','rough','grain','ribs','uni','arr']);
+const EDIT_KEYS=new Set(['mat','prof','mode','color','size','height','rough','grain','ribs','uni','arr','kind','speedk']);
 // applique un réglage du panneau aux traits choisis
 function applySel(keys){
   if(st.tool!=='sel'||!sel.size||stroking) return;
@@ -726,7 +838,7 @@ function applySel(keys){
   strokes=strokes.map(s=>{ if(!sel.has(s.id)) return s;
     const p={...s.p}; let paths=s.paths;
     for(const k of keys){
-      if(k==='size'){ const f=st.size/p.size; if(Math.abs(f-1)>1e-6){ paths=paths.map(a=>a.map((v,i)=>i%3===2?v*f:v)); } p.size=st.size; }
+      if(k==='size'){ const f=st.size/p.size; if(Math.abs(f-1)>1e-6){ paths=paths.map(a=>a.map((v,i)=>i%PS===2?v*f:v)); } p.size=st.size; }
       else p[k]=st[k]; }
     const n={...s, p, paths}; if(paths!==s.paths) n.bb=strokeBB(n); return n; });
   requestRender(0); dirtyOv=true; }
@@ -735,7 +847,7 @@ function selectAll(){ for(const s of strokes) sel.add(s.id); dirtyOv=true; updat
 function selectNone(){ sel.clear(); dirtyOv=true; updateSelUI(); }
 // montre dans le panneau les réglages du trait choisi en dernier
 function loadSelParams(){ const s=[...strokes].reverse().find(t=>sel.has(t.id)); if(!s) return;
-  const p=s.p; st.mat=p.mat; st.prof=p.prof; st.mode=p.mode; st.color=p.color; $('pick').value=p.color;
+  const p=s.p; st.kind=p.kind||0; setVal('speedk',p.speedk||0); st.mat=p.mat; st.prof=p.prof; st.mode=p.mode; st.color=p.color; $('pick').value=p.color;
   for(const k of ['size','height','rough','grain','ribs','arr']) setVal(k,p[k]);
   st.uni=!!p.uni; $('uni').checked=st.uni; refresh(); }
 let selDrag=null;
@@ -818,7 +930,7 @@ canvas.addEventListener('pointerdown',e=>{
     else { if(!e.shiftKey) sel.clear(); marquee=[x,y,x,y]; }
     dirtyOv=true; updateSelUI(); return;
   }
-  beginStroke(); smooth=raw=null;
+  spd=null; trackSpeed(x,y,e.timeStamp); beginStroke(); smooth=raw=null;
   const pr = e.pointerType==='pen' ? (e.pressure||0.5) : 1;
   lineMode = e.shiftKey && !!lastEnd;
   if(lineMode){ addPoint(lastEnd.x,lastEnd.y,pr); addPoint(x,y,pr); }
@@ -846,6 +958,7 @@ canvas.addEventListener('pointermove',e=>{
     const [x,y]=toWorld(ev);
     let pr = ev.pointerType==='pen' ? ev.pressure : 1;
     if(ev.pointerType==='pen' && pr<=0) continue;
+    trackSpeed(x,y,ev.timeStamp||e.timeStamp);
     if(ev.pointerType==='pen' && ev.tiltX!==undefined){ const tilt=Math.min(1,Math.hypot(ev.tiltX,ev.tiltY)/60); pr*=1+tilt*0.6; }
     feed(x,y,Math.min(pr,1.4),ev.timeStamp||e.timeStamp);
   }
@@ -938,9 +1051,9 @@ const $=id=>document.getElementById(id);
 function buttons(el,list,key){
   list.forEach((name,i)=>{ const b=document.createElement('button'); b.textContent=name; b.onclick=()=>{ st[key]=i; refresh(); applySel([key]); }; el.appendChild(b); });
 }
-buttons($('mats'),MATS,'mat'); buttons($('profs'),PROFS,'prof'); buttons($('modes'),MODES,'mode');
+buttons($('kinds'),KINDS,'kind'); buttons($('mats'),MATS,'mat'); buttons($('profs'),PROFS,'prof'); buttons($('modes'),MODES,'mode');
 const sliders={ size:[1,v=>v], stab:[0.01,v=>Math.round(v*100)], height:[0.01,v=>v.toFixed(2)], rough:[0.01,v=>Math.round(v*100)], chaos:[0.01,v=>Math.round(v*100)],
-  grain:[0.01,v=>Math.round(v*100)], ribs:[1,v=>v], dot:[1,v=>v], arr:[0.01,v=>v.toFixed(1)], az:[1,v=>Math.round(v)+'°'], el:[1,v=>Math.round(v)+'°'],
+  grain:[0.01,v=>Math.round(v*100)], speedk:[0.01,v=>Math.round(v*100)], ribs:[1,v=>v], dot:[1,v=>v], arr:[0.01,v=>v.toFixed(1)], az:[1,v=>Math.round(v)+'°'], el:[1,v=>Math.round(v)+'°'],
   relief:[0.01,v=>v.toFixed(2)], rim:[0.01,v=>Math.round(v*100)], symn:[1,v=>v], skop:[0.01,v=>Math.round(v*100)] };
 const shadeKeys=new Set(['az','el','relief','rim','dot','skop']);
 for(const [k,[mul]] of Object.entries(sliders)){
@@ -965,17 +1078,37 @@ function renderSwatches(){
     el.appendChild(s); });
 }
 function refresh(){
-  [['mats','mat'],['profs','prof'],['modes','mode']].forEach(([id,k])=>[...$(id).children].forEach((b,i)=>b.classList.toggle('on',i===st[k])));
+  [['kinds','kind'],['mats','mat'],['profs','prof'],['modes','mode']].forEach(([id,k])=>[...$(id).children].forEach((b,i)=>b.classList.toggle('on',i===st[k])));
   renderSwatches();
 }
 function setTool(t){ st.tool=t; $('toolDraw').classList.toggle('on',t==='draw'); $('toolSel').classList.toggle('on',t==='sel');
   canvas.style.cursor=t==='sel'?'default':'crosshair'; if(t==='draw'){ sel.clear(); dirtyOv=true; } updateSelUI(); }
 function updateSelUI(){ $('selbox').style.display=st.tool==='sel'?'block':'none';
   $('seldel').textContent = sel.size ? `Supprimer (${sel.size})` : 'Supprimer'; }
+// recettes : des réglages complets, inspirés de matériaux réels
+const RECIPES=[
+  ['Pierre',   {kind:0,mat:0,prof:0,mode:0,color:'#8f8b83',uni:true,arr:1.3,grain:0.9,rough:0.35,height:0.55,speedk:0}],
+  ['Céramique',{kind:0,mat:2,prof:0,mode:1,color:'#ece4d4',uni:false,grain:0,rough:0,height:0.7,speedk:0}],
+  ['Gaufrage', {kind:0,mat:0,prof:1,mode:3,uni:false,grain:0.05,rough:0,height:0.5,speedk:0}],
+  ['Métal',    {kind:0,mat:1,prof:0,mode:0,color:'#c9ced6',uni:false,grain:0,rough:0,height:0.7,speedk:0.3}],
+  ['Pâte',     {kind:0,mat:2,prof:0,mode:1,color:'#e8a7a0',uni:false,grain:0.1,rough:0.05,height:0.8,speedk:0.5}],
+  ['Perles d’or',{kind:1,mat:1,prof:0,mode:1,color:'#d9a441',uni:false,grain:0,rough:0,height:1,speedk:0}],
+  ['Rosier',   {kind:2,mat:2,prof:0,mode:0,color:'#7d9a72',uni:false,grain:0.1,rough:0,height:0.7,speedk:0}],
+  ['Barbelé',  {kind:3,mat:4,prof:0,mode:1,color:'#9aa3ad',uni:false,grain:0,rough:0,height:0.9,speedk:0}],
+  ['Laurier',  {kind:4,mat:1,prof:1,mode:0,color:'#d9a441',uni:false,grain:0,rough:0,height:0.6,speedk:0}],
+  ['Bois',     {kind:5,mat:0,prof:2,mode:0,color:'#7a5236',ribs:7,uni:false,grain:0.3,rough:0.2,height:0.6,speedk:0}],
+  ['Mousse',   {kind:6,mat:2,prof:0,mode:0,color:'#ece4d4',uni:false,grain:0,rough:0,height:0.8,speedk:0.25}],
+  ['Sable',    {kind:7,mat:0,prof:0,mode:1,color:'#d6b98c',uni:false,grain:0.2,rough:0,height:0.6,speedk:0}],
+  ['Poreux',   {kind:8,mat:4,prof:0,mode:0,color:'#a8a29a',uni:false,grain:0.15,rough:0.1,height:0.8,speedk:0}],
+];
+RECIPES.forEach(([name,rc])=>{ const b=document.createElement('button'); b.textContent=name;
+  b.onclick=()=>{ for(const [k,v] of Object.entries(rc)){ if(sliders[k]) setVal(k,v); else st[k]=v; }
+    $('pick').value=st.color; $('uni').checked=!!st.uni; refresh(); applySel(Object.keys(rc)); toast(name); };
+  $('recipes').appendChild(b); });
 $('toolDraw').onclick=()=>setTool('draw'); $('toolSel').onclick=()=>setTool('sel');
 $('seldel').onclick=deleteSel; $('selall').onclick=selectAll; $('selnone').onclick=selectNone;
 // pinceaux enregistrés
-const PKEYS=['mat','prof','mode','color','size','stab','height','rough','chaos','grain','ribs','uni','arr'];
+const PKEYS=['mat','prof','mode','color','size','stab','height','rough','chaos','grain','ribs','uni','arr','kind','speedk'];
 function renderPresets(){
   const el=$('presets'); el.innerHTML='';
   presets.forEach((p,i)=>{ const c=document.createElement('canvas'); c.width=88; c.height=88; const g=c.getContext('2d');
@@ -1003,11 +1136,12 @@ $('hide').onclick=()=>$('panel').classList.add('hidden');
 $('stabend').onchange=e=>{ st.stabEnd=e.target.checked; };
 
 function randomBrush(){
+  st.kind=Math.random()<0.45?Math.floor(Math.random()*KINDS.length):0;
   st.mat=Math.floor(Math.random()*MATS.length); st.prof=Math.floor(Math.random()*PROFS.length);
   const cols=[...DEFAULT_COLS,...customCols]; st.color=cols[Math.floor(Math.random()*cols.length)]; $('pick').value=st.color;
   setVal('size',Math.round(12+Math.random()*80)); setVal('height',0.3+Math.random()*0.7);
   setVal('rough',Math.random()<0.5?0:Math.random()*0.5); setVal('chaos',Math.random()<0.7?0:Math.random()*0.4);
-  setVal('ribs',Math.round(3+Math.random()*6)); refresh(); toast(`${MATS[st.mat]} · ${PROFS[st.prof]}`);
+  setVal('ribs',Math.round(3+Math.random()*6)); refresh(); toast(`${KINDS[st.kind]} · ${MATS[st.mat]} · ${PROFS[st.prof]}`);
 }
 addEventListener('keydown',e=>{
   if(e.target.tagName==='INPUT'&&e.target.type!=='range'&&e.target.type!=='checkbox') return;
