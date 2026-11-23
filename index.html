@@ -69,7 +69,7 @@
 
 <div id="panel">
   <div class="head"><h1>Haptika</h1><button id="hide" title="Masquer le panneau (Tab)">Masquer</button></div>
-  <div class="sub">Peinture en relief. Chaque trait a une hauteur. <span id="ver" style="opacity:.6">v7</span></div>
+  <div class="sub">Peinture en relief. Chaque trait a une hauteur. <span id="ver" style="opacity:.6">v8</span></div>
 
   <div class="lab">Outil</div>
   <div class="grid two"><button id="toolDraw" class="on">Pinceau (B)</button><button id="toolSel">Sélection (V)</button></div>
@@ -103,6 +103,10 @@
       <span class="lab" style="margin:0">Fond</span>
       <input type="color" id="bg" value="#e9e4da" title="Couleur du fond">
     </div>
+    <div class="row" style="grid-template-columns:78px 1fr"><span>Plaque</span>
+      <select id="sheet"><option value="0">Aucune</option><option value="1">Métal brossé</option><option value="2">Métal patiné</option><option value="3">Mon image…</option></select></div>
+    <input type="file" id="texfile" accept="image/*" hidden>
+    <div class="note" style="margin-top:0">Plaque : le fond devient une feuille que les traits emboutissent (matière « Plaque », ou mode Enfoncer). « Mon image… » utilise ta propre texture.</div>
   </div>
 
   <div class="sec">
@@ -181,7 +185,7 @@
 
 <script>
 "use strict";
-const VERSION='v7';
+const VERSION='v8';
 // ---------------------------------------------------------------- setup
 const canvas = document.getElementById('c');
 const gl = canvas.getContext('webgl2', {antialias:false, alpha:false, premultipliedAlpha:false, desynchronized:true, powerPreference:'high-performance'});
@@ -316,7 +320,7 @@ void main(){ ivec2 ip=ivec2(gl_FragCoord.xy); float v=texelFetch(uS,ip,0).r;
 
 const FS_SHADE = `#version 300 es
 precision highp float;
-uniform sampler2D uH,uC,uSk;
+uniform sampler2D uH,uC,uSk,uTexS; uniform int uSheet; uniform vec2 uTexSz;
 uniform ivec2 uDoc; uniform vec3 uBg,uL; uniform vec2 uOrg;
 uniform float uTanEl,uRelief,uRim,uDot,uSkA,uK; uniform vec4 uSkRect; uniform int uTransp;
 out vec4 o;
@@ -331,6 +335,23 @@ vec3 env(vec3 r){
   e+=vec3(1.6)*smoothstep(0.93,0.985,k);
   e+=vec3(0.45)*smoothstep(0.88,0.97,dot(r,normalize(vec3(-uL.x,-uL.y,uL.z))));
   return e;
+}
+// plaque de métal (ou image) que les traits emboutissent : la texture et les reflets suivent le relief
+vec3 sheetCol(vec2 wp, vec3 n, vec3 R, float dif, float ndh){
+  vec2 q=wp+n.xy*26.;
+  vec3 base;
+  if(uSheet==3) base=texture(uTexS,q/uTexSz).rgb;
+  else {
+    float br=0.6*vnoise(vec2(q.x*0.003,q.y*0.45))+0.4*vnoise(vec2(q.x*0.012,q.y*1.7));
+    base=vec3(0.52,0.53,0.55)*(0.82+0.36*br);
+    if(uSheet!=1){ float s1=fbm(q*0.0035+3.1), s2=fbm(q*0.011-7.);
+      base=mix(base,vec3(0.74,0.50,0.44),smoothstep(0.56,0.76,s1)*0.7);
+      base=mix(base,vec3(0.36,0.33,0.31),smoothstep(0.55,0.7,s2)*0.5);
+      base*=0.85+0.3*fbm(q*0.05); }
+  }
+  float bx=q.x*0.0011+R.x*1.1+uL.x*0.25;
+  float band=exp(-pow((fract(bx)-0.5)*26.,2.))+0.5*exp(-pow((fract(bx*1.9+0.37)-0.5)*50.,2.));
+  return base*(0.32+0.68*clamp(dif,0.,1.3)) + vec3(1.,0.97,0.95)*band*(0.16+0.24*length(base)) + vec3(0.9)*pow(ndh,70.)*0.5;
 }
 void main(){
   ivec2 ip=ivec2(gl_FragCoord.xy); vec2 px=gl_FragCoord.xy; vec2 wp=px/uK+uOrg;
@@ -359,10 +380,10 @@ void main(){
   if(uSkA>0.){ vec2 su=(px-uSkRect.xy)/uSkRect.zw;
     if(su.x>=0.&&su.y>=0.&&su.x<=1.&&su.y<=1.){ vec4 s=texture(uSk,su); ground=mix(ground,s.rgb,s.a*uSkA);} }
   float dif=clamp(ndl/fl,0.,1.7);
-  vec3 gcol=ground*(0.55+0.45*min(dif,1.25))*shadow*ao;
   vec3 oc; float alpha=1.;
   float fres=pow(1.-max(n.z,0.),3.);
   vec3 R=reflect(-V,n);
+  vec3 gcol = uSheet>0 ? sheetCol(wp,n,R,dif,ndh)*shadow*ao : ground*(0.55+0.45*min(dif,1.25))*shadow*ao;
   if(mat==0){ // argile
     float w=clamp((ndl+.45)/1.45,0.,1.)/((fl+.45)/1.45);
     float g=fbm(wp*.3+seed*13.)*0.1-0.05;
@@ -381,6 +402,8 @@ void main(){
   } else if(mat==4){ // métal satiné
     float st=0.5*vnoise(vec2(wp.x*0.02,wp.y*0.8)+seed)+0.5*vnoise(vec2(wp.x*0.8,wp.y*0.02)-seed);
     oc=col*(0.18+0.4*dif)+col*env(R)*0.55+mix(col,vec3(1),.5)*pow(ndh,32.)*(0.5+0.7*st);
+  } else if(mat==7){ // plaque : le trait prend l'aspect de la plaque emboutie
+    oc=sheetCol(wp,n,R,dif,ndh);
   } else if(mat==6){ // granuleux : grains clairs sur fond sombre, qui accrochent la lumière rasante
     const float CELL=0.95;
     vec2 gp=wp/CELL+seed*0.37; vec2 gi=floor(gp), f=fract(gp);
@@ -402,8 +425,8 @@ void main(){
   }
   if(mat!=5){ oc*=shadow*ao; oc+=vec3(1.)*fres*uRim*0.55; }
   vec3 outc=mix(gcol,oc,cov);
-  float outA=uTransp==1 ? cov*alpha : 1.;
-  if(uTransp==1) outc=oc;
+  float outA=uTransp==1 && uSheet==0 ? cov*alpha : 1.;
+  if(uTransp==1 && uSheet==0) outc=oc;
   o=vec4(outc,outA);
 }`;
 
@@ -480,12 +503,12 @@ function scissor(r){ if(!r){ gl.disable(gl.SCISSOR_TEST); return; }
   gl.enable(gl.SCISSOR_TEST); gl.scissor(r[0],r[1],r[2]-r[0],r[3]-r[1]); }
 
 // ---------------------------------------------------------------- state
-const MATS=['Argile','Chrome','Émail','Terrazzo','Métal satiné','Pointillé','Granuleux'];
+const MATS=['Argile','Chrome','Émail','Terrazzo','Métal satiné','Pointillé','Granuleux','Plaque'];
 const PROFS=['Dôme','Arête','Nervures','Plat','Perle'];
 const MODES=['Fusion','Empiler','Recouvrir','Enfoncer','Gomme','Creuser'];
 const DEFAULT_COLS=['#c8643b','#d9a441','#7d9a72','#2f4fa8','#e8a7a0','#2f8f8a','#ece4d4','#1d1d22'];
 const st={ mat:0, prof:0, mode:0, color:'#c8643b', bg:'#e9e4da', tool:'draw',
-  size:38, stab:0, stabEnd:true, kind:0, speedk:0, height:0.6, rough:0.1, chaos:0, grain:0.15, ribs:5, dot:6, uni:false, arr:1.5,
+  size:38, stab:0, stabEnd:true, kind:0, speedk:0, sheet:0, height:0.6, rough:0.1, chaos:0, grain:0.15, ribs:5, dot:6, uni:false, arr:1.5,
   az:135, el:38, relief:1, rim:0.2, sym:0, symn:6, skop:0.45, exp:2 };
 const store={ get(k,d){ try{ return JSON.parse(localStorage.getItem(k))??d; }catch(_){ return d; } },
   set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(_){} } };
@@ -780,7 +803,8 @@ function afterListChange(){ const ids=new Set(strokes.map(s=>s.id)); for(const i
 function shade(c, surf, target, transparent, rect){
   gl.bindFramebuffer(gl.FRAMEBUFFER,target); gl.viewport(0,0,c.W,c.H);
   gl.useProgram(P_SHADE.p); const u=P_SHADE.u;
-  bindTex(0,surf.h); bindTex(1,surf.c); bindTex(2,sketchTex);
+  bindTex(0,surf.h); bindTex(1,surf.c); bindTex(2,sketchTex); bindTex(3,sheetTex); gl.uniform1i(u.uTexS,3);
+  gl.uniform1i(u.uSheet,st.sheet===3&&!sheetSz?2:st.sheet); gl.uniform2f(u.uTexSz,sheetSz?sheetSz[0]:1,sheetSz?sheetSz[1]:1);
   gl.uniform1i(u.uH,0); gl.uniform1i(u.uC,1); gl.uniform1i(u.uSk,2);
   gl.uniform2i(u.uDoc,c.W,c.H); gl.uniform3fv(u.uBg,hex2rgb(st.bg));
   const az=st.az*Math.PI/180, el=st.el*Math.PI/180;
@@ -797,6 +821,18 @@ function shade(c, surf, target, transparent, rect){
   scissor(null);
 }
 let sketchTex=texture(gl.RGBA8,1,1);
+let sheetTex=texture(gl.RGBA8,1,1), sheetSz=null;
+function loadSheet(file){
+  const img=new Image(); img.onload=()=>{
+    gl.deleteTexture(sheetTex); sheetTex=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,sheetTex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true); gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,img);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false); gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.MIRRORED_REPEAT); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.MIRRORED_REPEAT);
+    const k=Math.max(1,1600/Math.max(img.width,img.height)); sheetSz=[img.width*k,img.height*k];
+    st.sheet=3; $('sheet').value='3'; dirtyShade=true; URL.revokeObjectURL(img.src); toast('Texture de plaque chargée');
+  }; img.src=URL.createObjectURL(file);
+}
 function drawView(){
   gl.bindFramebuffer(gl.FRAMEBUFFER,null); gl.viewport(0,0,bufW(),bufH());
   gl.useProgram(P_VIEW.p); bindTex(0,MC.shTex); const u=P_VIEW.u; gl.uniform1i(u.uImg,0);
@@ -1078,6 +1114,8 @@ for(const [k,[mul]] of Object.entries(sliders)){
 function showVal(k){ const out=$(k).parentElement.querySelector('output'); if(out) out.textContent=sliders[k][1](st[k]); }
 function setVal(k,v){ st[k]=v; $(k).value=v/sliders[k][0]; showVal(k); if(shadeKeys.has(k)) dirtyShade=true; }
 $('sym').onchange=e=>{ st.sym=+e.target.value; symC=viewCenter(); };
+$('sheet').onchange=e=>{ const v=+e.target.value; if(v===3 && !sheetSz){ $('texfile').click(); e.target.value=String(st.sheet); return; } st.sheet=v; dirtyShade=true; };
+$('texfile').onchange=e=>{ if(e.target.files[0]) loadSheet(e.target.files[0]); e.target.value=''; };
 $('bg').oninput=e=>{ st.bg=e.target.value; dirtyShade=true; dirtyView=true; };
 $('pick').oninput=e=>{ st.color=e.target.value; refresh(); applySel(['color']); };
 $('uni').onchange=e=>{ st.uni=e.target.checked; applySel(['uni']); };
@@ -1117,10 +1155,12 @@ const RECIPES=[
   ['Sable',    {kind:7,mat:0,prof:0,mode:1,color:'#d6b98c',uni:false,grain:0.2,rough:0,height:0.6,speedk:0}],
   ['Poreux',   {kind:8,mat:4,prof:0,mode:0,color:'#a8a29a',uni:false,grain:0.15,rough:0.1,height:0.8,speedk:0}],
   ['Sable en relief',{kind:0,mat:6,prof:0,mode:0,color:'#dcdad4',bg:'#0a0a0b',uni:false,grain:0.25,rough:0.3,height:0.45,speedk:0,el:28}],
+  ['Gaufrage métal',{kind:0,mat:7,prof:0,mode:0,sheet:2,size:16,uni:true,arr:0.8,grain:0,rough:0.05,height:0.75,speedk:0}],
+  ['Emboutir', {kind:0,mat:7,prof:0,mode:3,sheet:2,size:8,uni:false,grain:0,rough:0,height:0.45,speedk:0}],
   ['Sillon',   {kind:0,mat:6,prof:0,mode:5,color:'#dcdad4',bg:'#0a0a0b',uni:false,grain:0.2,rough:0.3,height:0.55,speedk:0,el:28}],
 ];
 RECIPES.forEach(([name,rc])=>{ const b=document.createElement('button'); b.textContent=name;
-  b.onclick=()=>{ for(const [k,v] of Object.entries(rc)){ if(k==='bg'){ st.bg=v; $('bg').value=v; dirtyShade=dirtyView=true; } else if(sliders[k]) setVal(k,v); else st[k]=v; }
+  b.onclick=()=>{ for(const [k,v] of Object.entries(rc)){ if(k==='bg'){ st.bg=v; $('bg').value=v; dirtyShade=dirtyView=true; } else if(k==='sheet'){ st.sheet=v; $('sheet').value=String(v); dirtyShade=true; } else if(sliders[k]) setVal(k,v); else st[k]=v; }
     $('pick').value=st.color; $('uni').checked=!!st.uni; refresh(); applySel(Object.keys(rc)); toast(name); };
   $('recipes').appendChild(b); });
 $('toolDraw').onclick=()=>setTool('draw'); $('toolSel').onclick=()=>setTool('sel');
