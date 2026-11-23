@@ -69,7 +69,7 @@
 
 <div id="panel">
   <div class="head"><h1>Haptika</h1><button id="hide" title="Masquer le panneau (Tab)">Masquer</button></div>
-  <div class="sub">Peinture en relief. Chaque trait a une hauteur. <span id="ver" style="opacity:.6">v6</span></div>
+  <div class="sub">Peinture en relief. Chaque trait a une hauteur. <span id="ver" style="opacity:.6">v7</span></div>
 
   <div class="lab">Outil</div>
   <div class="grid two"><button id="toolDraw" class="on">Pinceau (B)</button><button id="toolSel">Sélection (V)</button></div>
@@ -181,7 +181,7 @@
 
 <script>
 "use strict";
-const VERSION='v6';
+const VERSION='v7';
 // ---------------------------------------------------------------- setup
 const canvas = document.getElementById('c');
 const gl = canvas.getContext('webgl2', {antialias:false, alpha:false, premultipliedAlpha:false, desynchronized:true, powerPreference:'high-performance'});
@@ -279,6 +279,11 @@ void main(){
     h=mix(hb,s,cov); c=mix(cb,uCol,cov); a=max(ca,cov); if(cov>0.5){ m=uMat; sd=uSeed; }
   } else if(uMode==3){     // enfoncer
     h=max(hb-s*0.9,-uHeight*1.2); if(ca<0.01) c=bc.rgb;
+  } else if(uMode==5){     // creuser : un sillon, la matière repoussée en bourrelets sur les bords
+    float f=0.55*exp(-pow((t-0.16)/0.11,2.)) - 0.62*smoothstep(0.22,0.85,t);
+    f += uGrain*0.16*(fbm(wp*0.07+uSeed*7.)-0.47);
+    h=hb*(1.-cov*0.9) + uHeight*f*cov;
+    c=mix(cb,uCol,cov); a=max(ca,cov); if(cov>0.5){ m=uMat; sd=uSeed; }
   } else {                 // gomme
     h=hb*(1.-cov); a=ca*(1.-cov); c=bc.rgb;
   }
@@ -376,6 +381,17 @@ void main(){
   } else if(mat==4){ // métal satiné
     float st=0.5*vnoise(vec2(wp.x*0.02,wp.y*0.8)+seed)+0.5*vnoise(vec2(wp.x*0.8,wp.y*0.02)-seed);
     oc=col*(0.18+0.4*dif)+col*env(R)*0.55+mix(col,vec3(1),.5)*pow(ndh,32.)*(0.5+0.7*st);
+  } else if(mat==6){ // granuleux : grains clairs sur fond sombre, qui accrochent la lumière rasante
+    const float CELL=0.95;
+    vec2 gp=wp/CELL+seed*0.37; vec2 gi=floor(gp), f=fract(gp);
+    vec2 go=vec2(hash(gi),hash(gi*1.31+5.7))*0.5+0.25;
+    float rad=0.24+0.2*hash(gi*2.1+1.3), aa=0.9/max(CELL*uK,0.3);
+    float on=step(0.38,hash(gi*0.77+9.1));
+    float gm=on*smoothstep(rad+aa,rad-aa,length(f-go));
+    float g2=hash(gi*1.73+11.3), lit=clamp(dif,0.,1.5);
+    vec3 dark=col*0.045*(0.3+0.7*lit);
+    vec3 bright=col*(0.05+1.05*pow(lit,1.7))*(0.35+0.8*g2);
+    oc=mix(dark,bright,gm);
   } else { // pointillé
     float lum=clamp((0.2+0.8*dif)*shadow*ao,0.,1.);
     mat2 Rm=mat2(0.7071,-0.7071,0.7071,0.7071); vec2 f=fract(Rm*wp/uDot)-0.5;
@@ -464,9 +480,9 @@ function scissor(r){ if(!r){ gl.disable(gl.SCISSOR_TEST); return; }
   gl.enable(gl.SCISSOR_TEST); gl.scissor(r[0],r[1],r[2]-r[0],r[3]-r[1]); }
 
 // ---------------------------------------------------------------- state
-const MATS=['Argile','Chrome','Émail','Terrazzo','Métal satiné','Pointillé'];
+const MATS=['Argile','Chrome','Émail','Terrazzo','Métal satiné','Pointillé','Granuleux'];
 const PROFS=['Dôme','Arête','Nervures','Plat','Perle'];
-const MODES=['Fusion','Empiler','Recouvrir','Enfoncer','Gomme'];
+const MODES=['Fusion','Empiler','Recouvrir','Enfoncer','Gomme','Creuser'];
 const DEFAULT_COLS=['#c8643b','#d9a441','#7d9a72','#2f4fa8','#e8a7a0','#2f8f8a','#ece4d4','#1d1d22'];
 const st={ mat:0, prof:0, mode:0, color:'#c8643b', bg:'#e9e4da', tool:'draw',
   size:38, stab:0, stabEnd:true, kind:0, speedk:0, height:0.6, rough:0.1, chaos:0, grain:0.15, ribs:5, dot:6, uni:false, arr:1.5,
@@ -1100,9 +1116,11 @@ const RECIPES=[
   ['Mousse',   {kind:6,mat:2,prof:0,mode:0,color:'#ece4d4',uni:false,grain:0,rough:0,height:0.8,speedk:0.25}],
   ['Sable',    {kind:7,mat:0,prof:0,mode:1,color:'#d6b98c',uni:false,grain:0.2,rough:0,height:0.6,speedk:0}],
   ['Poreux',   {kind:8,mat:4,prof:0,mode:0,color:'#a8a29a',uni:false,grain:0.15,rough:0.1,height:0.8,speedk:0}],
+  ['Sable en relief',{kind:0,mat:6,prof:0,mode:0,color:'#dcdad4',bg:'#0a0a0b',uni:false,grain:0.25,rough:0.3,height:0.45,speedk:0,el:28}],
+  ['Sillon',   {kind:0,mat:6,prof:0,mode:5,color:'#dcdad4',bg:'#0a0a0b',uni:false,grain:0.2,rough:0.3,height:0.55,speedk:0,el:28}],
 ];
 RECIPES.forEach(([name,rc])=>{ const b=document.createElement('button'); b.textContent=name;
-  b.onclick=()=>{ for(const [k,v] of Object.entries(rc)){ if(sliders[k]) setVal(k,v); else st[k]=v; }
+  b.onclick=()=>{ for(const [k,v] of Object.entries(rc)){ if(k==='bg'){ st.bg=v; $('bg').value=v; dirtyShade=dirtyView=true; } else if(sliders[k]) setVal(k,v); else st[k]=v; }
     $('pick').value=st.color; $('uni').checked=!!st.uni; refresh(); applySel(Object.keys(rc)); toast(name); };
   $('recipes').appendChild(b); });
 $('toolDraw').onclick=()=>setTool('draw'); $('toolSel').onclick=()=>setTool('sel');
