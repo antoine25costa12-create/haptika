@@ -58,6 +58,8 @@
   .cross:before,.cross:after{content:"";position:absolute;background:currentColor}
   .cross:before{left:21px;top:0;width:2px;height:44px}.cross:after{top:21px;left:0;height:2px;width:44px}
   #diag{position:fixed;right:10px;top:10px;background:rgba(0,0,0,.78);color:#dfe;font:11px/1.45 ui-monospace,monospace;padding:8px 10px;border-radius:8px;white-space:pre;display:none;z-index:6;pointer-events:none}
+  .vh{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;pointer-events:none}
+  label.btn{display:block}
   #ov{position:fixed;left:0;top:0;width:100%;height:100%;pointer-events:none}
   .note{color:var(--mute);font-size:11px;line-height:1.45;margin-top:6px}
   #err{position:fixed;inset:0;display:none;place-items:center;background:#111;color:#eee;padding:30px;text-align:center}
@@ -69,7 +71,7 @@
 
 <div id="panel">
   <div class="head"><h1>Haptika</h1><button id="hide" title="Masquer le panneau (Tab)">Masquer</button></div>
-  <div class="sub">Peinture en relief. Chaque trait a une hauteur. <span id="ver" style="opacity:.6">v8</span></div>
+  <div class="sub">Peinture en relief. Chaque trait a une hauteur. <span id="ver" style="opacity:.6">v9</span></div>
 
   <div class="lab">Outil</div>
   <div class="grid two"><button id="toolDraw" class="on">Pinceau (B)</button><button id="toolSel">Sélection (V)</button></div>
@@ -103,10 +105,11 @@
       <span class="lab" style="margin:0">Fond</span>
       <input type="color" id="bg" value="#e9e4da" title="Couleur du fond">
     </div>
-    <div class="row" style="grid-template-columns:78px 1fr"><span>Plaque</span>
-      <select id="sheet"><option value="0">Aucune</option><option value="1">Métal brossé</option><option value="2">Métal patiné</option><option value="3">Mon image…</option></select></div>
-    <input type="file" id="texfile" accept="image/*" hidden>
-    <div class="note" style="margin-top:0">Plaque : le fond devient une feuille que les traits emboutissent (matière « Plaque », ou mode Enfoncer). « Mon image… » utilise ta propre texture.</div>
+    <div class="row" style="grid-template-columns:78px 1fr 64px"><span>Plaque</span>
+      <select id="sheet"><option value="0">Aucune</option><option value="1">Métal brossé</option><option value="2">Métal patiné</option><option value="3">Mon image</option></select>
+      <label for="texfile" class="btn" title="Choisir une image pour la plaque">Image…</label></div>
+    <input type="file" id="texfile" accept="image/*" class="vh">
+    <div class="note" style="margin-top:0">Plaque : le fond devient une feuille que les traits emboutissent (matière « Plaque », ou mode Enfoncer). « Image… » : ta propre photo devient la plaque (métal, papier, cuir…).</div>
   </div>
 
   <div class="sec">
@@ -148,12 +151,13 @@
   <div class="sec">
     <div class="lab">Esquisse en dessous</div>
     <div class="grid">
-      <button id="skload">Charger</button>
+      <label for="skfile" class="btn">Charger</label>
       <button id="skmove" title="Déplacer l'esquisse (J)">Déplacer</button>
       <button id="skclear">Retirer</button>
     </div>
     <div class="row"><span>Opacité</span><input type="range" id="skop" min="0" max="100" value="45"><output></output></div>
-    <input type="file" id="skfile" accept="image/*" hidden>
+    <input type="file" id="skfile" accept="image/*" class="vh">
+    <label class="check" style="margin-left:0"><input type="checkbox" id="skexp"> Inclure l'esquisse à l'export (dessiner sur une photo)</label>
   </div>
 
   <div class="sec">
@@ -185,7 +189,7 @@
 
 <script>
 "use strict";
-const VERSION='v8';
+const VERSION='v9';
 // ---------------------------------------------------------------- setup
 const canvas = document.getElementById('c');
 const gl = canvas.getContext('webgl2', {antialias:false, alpha:false, premultipliedAlpha:false, desynchronized:true, powerPreference:'high-performance'});
@@ -376,14 +380,15 @@ void main(){
   float ao=clamp(1.-acc*0.0019/uK,0.5,1.);
   ao*=clamp(1.+min(h,0.)*0.006/uK,0.65,1.);
   // fond
-  vec3 ground=uBg;
+  vec3 ground=uBg; float skCov=0.;
   if(uSkA>0.){ vec2 su=(px-uSkRect.xy)/uSkRect.zw;
-    if(su.x>=0.&&su.y>=0.&&su.x<=1.&&su.y<=1.){ vec4 s=texture(uSk,su); ground=mix(ground,s.rgb,s.a*uSkA);} }
+    if(su.x>=0.&&su.y>=0.&&su.x<=1.&&su.y<=1.){ vec4 s=texture(uSk,su); skCov=s.a*uSkA; ground=mix(ground,s.rgb,skCov);} }
   float dif=clamp(ndl/fl,0.,1.7);
   vec3 oc; float alpha=1.;
   float fres=pow(1.-max(n.z,0.),3.);
   vec3 R=reflect(-V,n);
-  vec3 gcol = uSheet>0 ? sheetCol(wp,n,R,dif,ndh)*shadow*ao : ground*(0.55+0.45*min(dif,1.25))*shadow*ao;
+  vec3 gcol = ground*(0.55+0.45*min(dif,1.25))*shadow*ao;
+  if(uSheet>0) gcol = mix(sheetCol(wp,n,R,dif,ndh)*shadow*ao, gcol, skCov);
   if(mat==0){ // argile
     float w=clamp((ndl+.45)/1.45,0.,1.)/((fl+.45)/1.45);
     float g=fbm(wp*.3+seed*13.)*0.1-0.05;
@@ -425,8 +430,8 @@ void main(){
   }
   if(mat!=5){ oc*=shadow*ao; oc+=vec3(1.)*fres*uRim*0.55; }
   vec3 outc=mix(gcol,oc,cov);
-  float outA=uTransp==1 && uSheet==0 ? cov*alpha : 1.;
-  if(uTransp==1 && uSheet==0) outc=oc;
+  float outA=uTransp==1 && uSheet==0 ? max(cov*alpha,skCov) : 1.;
+  if(uTransp==1 && uSheet==0 && skCov<=0.) outc=oc;
   o=vec4(outc,outA);
 }`;
 
@@ -811,7 +816,7 @@ function shade(c, surf, target, transparent, rect){
   gl.uniform3f(u.uL,Math.cos(az)*Math.cos(el),Math.sin(az)*Math.cos(el),Math.sin(el));
   gl.uniform1f(u.uTanEl,Math.tan(el)); gl.uniform1f(u.uRelief,st.relief); gl.uniform1f(u.uRim,st.rim);
   gl.uniform1f(u.uDot,st.dot); gl.uniform1f(u.uK,c.k); gl.uniform2f(u.uOrg,c.x0,c.y0);
-  const showSk = sketch && !transparent && c===MC && target===c.shFbo;
+  const showSk = sketch && ((c===MC && target===c.shFbo && !transparent) || (c!==MC && st.skExp));
   gl.uniform1f(u.uSkA, showSk ? st.skop : 0);
   const R=sketch?sketch.rect:[0,0,1,1];
   gl.uniform4f(u.uSkRect,(R[0]-c.x0)*c.k,(R[1]-c.y0)*c.k,R[2]*c.k,R[3]*c.k);
@@ -1052,8 +1057,10 @@ if(window.visualViewport) visualViewport.addEventListener('resize',()=>fitCanvas
 // ---------------------------------------------------------------- export (rendu par tuiles, à la résolution choisie)
 function exportImage(kind){
   if(stroking) return;
-  if(!strokes.length){ toast("Rien à exporter pour l'instant."); return; }
+  const withSk = st.skExp && sketch;
+  if(!strokes.length && !withSk){ toast("Rien à exporter pour l'instant."); return; }
   let b=null; for(const s of strokes) b=unionR(b,worldBB(s));
+  if(withSk){ const R=sketch.rect; b=unionR(b,[R[0],R[1],R[0]+R[2],R[1]+R[3]]); }
   const pad=Math.max(b[2]-b[0],b[3]-b[1])*0.03+12; b=[b[0]-pad,b[1]-pad,b[2]+pad,b[3]+pad];
   let k=st.exp;
   let w=Math.ceil((b[2]-b[0])*k), h=Math.ceil((b[3]-b[1])*k);
@@ -1114,7 +1121,7 @@ for(const [k,[mul]] of Object.entries(sliders)){
 function showVal(k){ const out=$(k).parentElement.querySelector('output'); if(out) out.textContent=sliders[k][1](st[k]); }
 function setVal(k,v){ st[k]=v; $(k).value=v/sliders[k][0]; showVal(k); if(shadeKeys.has(k)) dirtyShade=true; }
 $('sym').onchange=e=>{ st.sym=+e.target.value; symC=viewCenter(); };
-$('sheet').onchange=e=>{ const v=+e.target.value; if(v===3 && !sheetSz){ $('texfile').click(); e.target.value=String(st.sheet); return; } st.sheet=v; dirtyShade=true; };
+$('sheet').onchange=e=>{ const v=+e.target.value; if(v===3 && !sheetSz){ toast('Touche « Image… » pour choisir ta photo'); e.target.value=String(st.sheet); return; } st.sheet=v; dirtyShade=true; };
 $('texfile').onchange=e=>{ if(e.target.files[0]) loadSheet(e.target.files[0]); e.target.value=''; };
 $('bg').oninput=e=>{ st.bg=e.target.value; dirtyShade=true; dirtyView=true; };
 $('pick').oninput=e=>{ st.color=e.target.value; refresh(); applySel(['color']); };
@@ -1185,7 +1192,7 @@ $('savebrush').onclick=()=>{ const p={}; PKEYS.forEach(k=>p[k]=st[k]); presets.p
 
 $('undo').onclick=undo; $('redo').onclick=redo; $('clear').onclick=clearAll;
 $('png').onclick=()=>exportImage('png'); $('jpg').onclick=()=>exportImage('jpg');
-$('skload').onclick=()=>$('skfile').click();
+$('skexp').onchange=e=>{ st.skExp=e.target.checked; };
 $('skfile').onchange=e=>{ if(e.target.files[0]) loadSketch(e.target.files[0]); e.target.value=''; };
 $('skmove').onclick=()=>{ skMove=!skMove; $('skmove').classList.toggle('on',skMove); canvas.style.cursor=skMove?'move':(st.tool==='sel'?'default':'crosshair'); };
 $('skclear').onclick=()=>{ sketch=null; dirtyShade=true; };
