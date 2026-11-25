@@ -63,6 +63,13 @@
   .filebtn input{position:absolute;left:0;top:0;width:100%;height:100%;opacity:0;font-size:60px;cursor:pointer}
   #ov{position:fixed;left:0;top:0;width:100%;height:100%;pointer-events:none}
   .note{color:var(--mute);font-size:11px;line-height:1.45;margin-top:6px}
+  .chars{display:grid;grid-template-columns:repeat(8,1fr);gap:3px;max-height:196px;overflow-y:auto;margin-top:6px;scrollbar-width:thin}
+  .chars button{padding:4px 0;font-size:14px;line-height:1.2}
+  .chars button.done{border-color:#4f8a5b;color:#cdeccf;background:#1e2a21}
+  .chars button.auto{opacity:.42}
+  .chars button.on{border-color:var(--accent);background:#2b2720;color:#fff;opacity:1}
+  input[type=text]{width:100%;background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:7px;padding:5px 7px;font:inherit;font-size:13px;-webkit-user-select:text;user-select:text}
+  #fontcur{font-size:30px;line-height:1;text-align:center;color:#fff;min-width:44px}
   #err{position:fixed;inset:0;display:none;place-items:center;background:#111;color:#eee;padding:30px;text-align:center}
 </style>
 </head>
@@ -72,7 +79,7 @@
 
 <div id="panel">
   <div class="head"><h1>Haptika</h1><button id="hide" title="Masquer le panneau (Tab)">Masquer</button></div>
-  <div class="sub">Peinture en relief. Chaque trait a une hauteur. <span id="ver" style="opacity:.6">v10</span></div>
+  <div class="sub">Peinture en relief. Chaque trait a une hauteur. <span id="ver" style="opacity:.6">v11</span></div>
 
   <div class="lab">Outil</div>
   <div class="grid two"><button id="toolDraw" class="on">Pinceau (B)</button><button id="toolSel">Sélection (V)</button></div>
@@ -80,6 +87,32 @@
     <div class="grid" style="margin-top:5px"><button id="seldel">Supprimer</button><button id="selall">Tout</button><button id="selnone">Aucun</button></div>
     <div class="note">Touche un trait pour le choisir (Maj : en ajouter), glisse pour le déplacer, ou trace un rectangle autour de plusieurs.
       Tant que des traits sont choisis, la matière, le profil, le mode, la couleur et les réglages du pinceau s'appliquent à eux.</div>
+  </div>
+
+  <div class="sec"><div class="lab">Police (mes lettres)</div>
+    <button id="fontMode" style="width:100%">Dessiner ma police</button>
+    <div id="fontbox" style="display:none">
+      <div style="display:flex;gap:6px;align-items:center;margin-top:7px">
+        <button id="fontPrev" title="Lettre précédente (,)">◀</button>
+        <div id="fontcur">A</div>
+        <button id="fontNext" title="Lettre suivante (;)">▶</button>
+        <span style="flex:1"></span>
+        <button id="fontClearG">Effacer la lettre</button>
+      </div>
+      <div class="chars" id="fontChars"></div>
+      <label class="check" style="margin-left:0;margin-top:6px"><input type="checkbox" id="fontTpl" checked> Modèle à repasser (en bleu)</label>
+      <div class="note">Dessine la lettre entre les lignes (ligne de base en rouge). Tout le pinceau compte : taille, pression, formes, Gomme.
+        Le contour exporté est la silhouette de tes traits ; le relief et la matière restent dans Haptika et dans le rendu chrome des titres.
+        Les lettres accentuées se font toutes seules à partir de ta lettre et de l'accent (dessine ´ ` ˆ ¨ ¸ pour avoir tes propres accents).</div>
+    </div>
+    <div class="row" style="grid-template-columns:78px 1fr"><span>Nom</span><input type="text" id="fontName" value="KRFT Titre" spellcheck="false"></div>
+    <div class="row"><span>Espacement</span><input type="range" id="fsp" min="0" max="160" value="51"><output></output></div>
+    <label class="check" style="margin-left:0"><input type="checkbox" id="fontFill" checked> Compléter avec le modèle les lettres pas encore dessinées</label>
+    <div class="grid two" style="margin-top:5px"><button id="fontTTF">Exporter .ttf</button><button id="fontSave">Sauver le projet</button></div>
+    <span class="btn filebtn" style="margin-top:5px">Ouvrir un projet…<input type="file" id="fontOpen" accept=".json,application/json"></span>
+    <div class="lab" style="margin-top:9px">Écrire avec ma police</div>
+    <div style="display:flex;gap:5px"><input type="text" id="fontText" value="Coulée du plâtre" spellcheck="false"><button id="fontWrite">Écrire</button></div>
+    <div class="note">Écrit le texte au centre de l'écran : tes lettres gardent leurs traits et leur matière ; les autres prennent le pinceau actuel (essaie « Métal » pour du chrome). Zoome ou dézoome avant pour changer la taille.</div>
   </div>
 
   <div class="sec"><div class="lab">Pinceaux prêts</div><div class="grid" id="recipes"></div></div>
@@ -186,9 +219,10 @@
 <div id="diag"></div>
 <div id="err"></div>
 
+<script src="police.js"></script>
 <script>
 "use strict";
-const VERSION='v10';
+const VERSION='v11';
 // ---------------------------------------------------------------- setup
 const canvas = document.getElementById('c');
 const gl = canvas.getContext('webgl2', {antialias:false, alpha:false, premultipliedAlpha:false, desynchronized:true, powerPreference:'high-performance'});
@@ -522,6 +556,7 @@ let view={s:1,ox:0,oy:0};
 let symC=[0,0];
 let sketch=null;   // {rect:[x,y,w,h]} en coordonnées monde
 let skMove=false;
+let fontOn=false;   // mode « Dessiner ma police »
 
 function hex2rgb(h){ const n=parseInt(h.slice(1),16); return [(n>>16&255)/255,(n>>8&255)/255,(n&255)/255]; }
 
@@ -701,7 +736,7 @@ function ensureMain(){ const z=mainSize(); let changed=false;
   if(!MC||MC.W!==z.w||MC.H!==z.h){ if(MC) freeCtx(MC); MC=makeCtx(z.w,z.h); changed=true; }
   MC.q=z.q; return changed; }
 function placeMain(){ MC.k=view.s*MC.q; MC.x0=(-MARG-view.ox)/view.s; MC.y0=(-MARG-view.oy)/view.s; }
-function renderMain(){ ensureMain(); placeMain(); renderAll(MC); renderGen++; needRender=0; dirtyShade=true; dirtyOv=true; }
+function renderMain(){ ensureMain(); placeMain(); renderAll(MC); renderGen++; needRender=0; dirtyShade=true; dirtyOv=true; if(fontOn) fontTouch(); }
 function requestRender(delay){ const t=performance.now()+delay; needRender = needRender ? Math.min(needRender,t) : t; }
 function viewChanged(){ dirtyView=true; dirtyOv=true; requestRender(140); }
 
@@ -792,6 +827,7 @@ function endStroke(){
     cur.bb=strokeBB(cur); pushHist(); strokes.push(cur);
     const t=c.base; c.base=c.work; c.work=t;
     if(last) lastEnd={x:last.x,y:last.y};
+    if(fontOn) fontTouch();
   } else dirtyShade=true;
   cur=null; live=null;
 }
@@ -861,6 +897,7 @@ function w2c(x,y){ const [cx,cy]=glToClient(x*view.s+view.ox, y*view.s+view.oy);
 let marquee=null;
 function drawOverlay(){
   og.clearRect(0,0,ov.width,ov.height);
+  if(fontOn) drawFontGuides();
   if(sel.size){ og.save(); og.lineWidth=1.5*dpr; og.setLineDash([6*dpr,4*dpr]); og.strokeStyle='#e2b469';
     for(const s of strokes) if(sel.has(s.id)){ const b=worldBB(s); const [ax,ay]=w2c(b[0],b[3]), [bx,by]=w2c(b[2],b[1]);
       og.strokeRect(ax-3*dpr,ay-3*dpr,bx-ax+6*dpr,by-ay+6*dpr); }
@@ -908,6 +945,7 @@ let selDrag=null;
 
 // ---------------------------------------------------------------- vue & saisie
 function resetView(){
+  if(fontOn){ fitGlyphView(); return; }
   if(!strokes.length){ view={s:1,ox:0,oy:0}; viewChanged(); return; }
   let b=null; for(const s of strokes) b=unionR(b,worldBB(s));
   const bw=bufW(), bh=bufH(), pad=0.08;
@@ -1131,7 +1169,7 @@ const sliders={ size:[1,v=>v], stab:[0.01,v=>Math.round(v*100)], height:[0.01,v=
   relief:[0.01,v=>v.toFixed(2)], rim:[0.01,v=>Math.round(v*100)], symn:[1,v=>v], skop:[0.01,v=>Math.round(v*100)] };
 const shadeKeys=new Set(['az','el','relief','rim','dot','skop']);
 for(const [k,[mul]] of Object.entries(sliders)){
-  const inp=$(k); inp.addEventListener('input',()=>{ st[k]=+inp.value*mul; showVal(k); if(shadeKeys.has(k)) dirtyShade=true; applySel([k]); });
+  const inp=$(k); inp.addEventListener('input',()=>{ st[k]=+inp.value*mul; showVal(k); if(shadeKeys.has(k)) dirtyShade=true; if(fontOn&&k==='size') dirtyOv=true; applySel([k]); });
 }
 function showVal(k){ const out=$(k).parentElement.querySelector('output'); if(out) out.textContent=sliders[k][1](st[k]); }
 function setVal(k,v){ st[k]=v; $(k).value=v/sliders[k][0]; showVal(k); if(shadeKeys.has(k)) dirtyShade=true; }
@@ -1241,6 +1279,8 @@ addEventListener('keydown',e=>{
   else if(key==='v'){ setTool('sel'); }
   else if(key==='b'){ setTool('draw'); }
   else if(key==='j'){ $('skmove').click(); }
+  else if(fontOn && e.key===','){ fontStep(-1); }
+  else if(fontOn && e.key===';'){ fontStep(1); }
   else if(key==='f'){ document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen?.(); }
 });
 let toastT; function toast(m){ const el=$('msg'); el.textContent=m; clearTimeout(toastT); toastT=setTimeout(()=>el.textContent='',2200); }
@@ -1282,7 +1322,142 @@ function diagUpdate(e){
   $('diag').textContent=lines.join(String.fromCharCode(10));
 }
 for(const t of ['pointerdown','pointermove']) canvas.addEventListener(t,e=>{ if(diagOn) diagUpdate(e); },{passive:true});
-window.__haptika={get st(){return st}, get strokes(){return strokes}, get MC(){return MC}, get view(){return view}, sel};
+// ---------------------------------------------------------------- police : dessiner ses propres lettres
+// Une lettre = des traits Haptika ordinaires, dessinés entre les lignes de guidage (1 unité du monde = 1 unité de police).
+// À l'export, chaque trait devient une chaîne de capsules (sa silhouette) et police.js en tire le contour TrueType.
+const FONTKEY='haptika.police', TPL_R=60, GUI=Police.guides(TPL_R);
+let fontProj=Object.assign({name:'KRFT Titre',spacing:null,template:true,glyphs:{}}, store.get(FONTKEY,{}));
+let fontCh='A', fontDoc=null, fontSaveT=null; const fontHist={};
+const FONT_CHARS=Police.charList().filter(c=>!' \u00a0\u202f\u2009'.includes(c));
+const r1=v=>Math.round(v*10)/10;
+function serStroke(s){ return {p:s.p, mir:s.mir, dx:r1(s.dx), dy:r1(s.dy), paths:s.paths.map(a=>a.map(r1))}; }
+function deserStroke(o){ const s={id:++sid, p:{...o.p}, paths:o.paths.map(a=>a.slice()), mir:o.mir, dx:o.dx||0, dy:o.dy||0, bb:null}; s.bb=strokeBB(s); return s; }
+// garde un point tous les ~0,3 rayon (la silhouette ne change pas)
+function thinPts(q){ if(q.length<3) return q; const o=[q[0]]; let l=q[0];
+  for(let i=1;i<q.length-1;i++){ const p=q[i]; if(Math.hypot(p[0]-l[0],p[1]-l[1])>Math.max(1.5,0.3*Math.min(p[2],l[2])) || Math.abs(p[2]-l[2])>0.04*l[2]){ o.push(p); l=p; } }
+  o.push(q[q.length-1]); return o; }
+// traits Haptika → squelette {p:[[x,y,r]], erase} (Enfoncer ne change pas la silhouette ; Gomme la creuse)
+function skelOf(list){
+  const S=[], tmp=[];
+  for(const s of list){ const p=s.p; if(p.mode===3) continue; const erase=p.mode===4;
+    s.paths.forEach((a,j)=>{
+      if((p.kind||0)===0){ const q=[]; for(let i=0;i<a.length;i+=PS) q.push([r1(a[i]+s.dx),r1(a[i+1]+s.dy),r1(a[i+2]*(1+(p.speedk||0)*a[i+3]))]);
+        if(q.length) S.push(erase?{p:thinPts(q),erase:true}:{p:thinPts(q)}); }
+      else { const G=makeGen(p,s.mir&&s.mir[j]);
+        for(let i=0;i<a.length;i+=PS){ tmp.length=0; genStep(G,a[i]+s.dx,a[i+1]+s.dy,a[i+2],a[i+3],tmp);
+          for(let m=0;m<tmp.length;m+=3) if(tmp[m+2]>0) S.push(erase?{p:[[r1(tmp[m]),r1(tmp[m+1]),r1(tmp[m+2])]],erase:true}:{p:[[r1(tmp[m]),r1(tmp[m+1]),r1(tmp[m+2])]]}); } }
+    }); }
+  return S; }
+function fontPersist(){ try{ localStorage.setItem(FONTKEY,JSON.stringify(fontProj)); }catch(e){ toast("Mémoire de l'appareil pleine : touche « Sauver le projet »"); } }
+function saveGlyph(){ if(!fontOn) return;
+  if(strokes.length) fontProj.glyphs[fontCh]={strokes:strokes.map(serStroke), skel:skelOf(strokes)}; else delete fontProj.glyphs[fontCh];
+  fontHist[fontCh]={hist:hist.slice(), fut:fut.slice()}; fontPersist(); updateFontUI(); }
+function fontTouch(){ clearTimeout(fontSaveT); fontSaveT=setTimeout(saveGlyph,500); }
+function fitGlyphView(){ let b=[-120,GUI.desc-90,980,GUI.asc+260]; for(const s of strokes) b=unionR(b,worldBB(s));
+  const bw=bufW(), bh=bufH(), pw=$('panel').classList.contains('hidden')?0:290*kx();
+  const s=Math.min((bw-pw)*0.92/(b[2]-b[0]), bh*0.92/(b[3]-b[1]));
+  view={s, ox:pw+(bw-pw)/2-(b[0]+b[2])/2*s, oy:bh/2-(b[1]+b[3])/2*s}; viewChanged(); }
+function loadGlyph(ch){
+  clearTimeout(fontSaveT); fontCh=ch; const g=fontProj.glyphs[ch];
+  strokes=g?g.strokes.map(deserStroke):[]; hist.length=0; fut.length=0;
+  const h=fontHist[ch]; if(h){ hist.push(...h.hist); fut.push(...h.fut); }
+  sel.clear(); lastEnd=null; fitGlyphView(); requestRender(0); dirtyOv=true; updateFontUI(); updateSelUI(); }
+function selectGlyph(ch){ if(stroking||ch===fontCh) return; saveGlyph(); loadGlyph(ch); }
+function fontStep(d){ const i=FONT_CHARS.indexOf(fontCh); selectGlyph(FONT_CHARS[(i+d+FONT_CHARS.length)%FONT_CHARS.length]); }
+function enterFont(){ if(stroking||fontOn) return;
+  fontDoc={strokes, hist:hist.slice(), fut:fut.slice(), view:{...view}};
+  fontOn=true; loadGlyph(fontCh); $('fontMode').classList.add('on'); $('fontMode').textContent='Revenir à mon dessin'; $('fontbox').style.display='block';
+  toast(`Dessine « ${fontCh} » entre les lignes`); }
+function leaveFont(){ if(stroking||!fontOn) return; saveGlyph(); fontOn=false;
+  strokes=fontDoc.strokes; hist.length=0; fut.length=0; hist.push(...fontDoc.hist); fut.push(...fontDoc.fut); view=fontDoc.view; fontDoc=null;
+  sel.clear(); viewChanged(); requestRender(0); updateSelUI(); $('fontMode').classList.remove('on'); $('fontMode').textContent='Dessiner ma police'; $('fontbox').style.display='none'; }
+function updateFontUI(){
+  $('fontcur').textContent=fontCh;
+  const el=$('fontChars');
+  if(!el.children.length) for(const ch of FONT_CHARS){ const b=document.createElement('button'); b.textContent=ch; b.dataset.ch=ch;
+    b.title=Police.COMP[ch]?'Accentuée : se fait toute seule (ou dessine-la)':Police.G[ch]===null?'Accent seul, utilisé par les lettres accentuées':'';
+    b.onclick=()=>selectGlyph(ch); el.appendChild(b); }
+  for(const b of el.children){ const ch=b.dataset.ch, done=!!fontProj.glyphs[ch];
+    b.className=(ch===fontCh?'on ':'')+(done?'done':(Police.COMP[ch]?'auto':'')); }
+  const n=Object.keys(fontProj.glyphs).length; $('fontTTF').textContent=`Exporter .ttf (${n} dessinée${n>1?'s':''})`;
+}
+// modèle à repasser + lignes de guidage
+function drawFontGuides(){
+  const k=Math.abs(w2c(1,0)[0]-w2c(0,0)[0]);
+  if($('fontTpl').checked){ const ctx=Police.context({drawn:{}, weight:st.size});
+    let P=null; try{ P=Police.partsOf(fontCh,ctx); }catch(_){}
+    if(P){ const all=[].concat(...P.map(p=>p.S.map(s=>({...s,dx:p.dx,dy:p.dy})))), bb=Police.bbox(all.map(s=>({p:s.p.map(q=>[q[0]+s.dx,q[1]+s.dy,q[2]])})));
+      const sx=-bb[0];
+      og.save(); og.lineCap='round'; og.lineJoin='round'; og.strokeStyle='rgba(60,110,230,.22)'; og.fillStyle='rgba(60,110,230,.22)';
+      for(const s of all){ const r=s.p.reduce((a,q)=>a+q[2],0)/s.p.length;
+        const pts=s.p.map(q=>w2c(q[0]+s.dx+sx,q[1]+s.dy));
+        if(pts.length===1){ og.beginPath(); og.arc(pts[0][0],pts[0][1],r*k,0,6.2832); og.fill(); continue; }
+        og.lineWidth=2*r*k; og.beginPath(); og.moveTo(pts[0][0],pts[0][1]); for(const q of pts) og.lineTo(q[0],q[1]); if(s.closed) og.closePath(); og.stroke(); }
+      og.restore(); } }
+  og.save(); og.lineWidth=Math.max(1,dpr); og.font=`${11*dpr}px system-ui,sans-serif`;
+  const line=(y,c,lab,dash)=>{ const ay=w2c(0,y)[1]; og.strokeStyle=c; og.fillStyle=c; og.setLineDash(dash?[6*dpr,5*dpr]:[]);
+    og.beginPath(); og.moveTo(0,ay); og.lineTo(ov.width,ay); og.stroke(); og.fillText(lab,ov.width-og.measureText(lab).width-12*dpr,ay-4*dpr); };
+  line(GUI.asc,'rgba(110,110,120,.7)','hampes',true); line(GUI.cap,'rgba(43,72,168,.8)','capitales',false);
+  line(GUI.xh,'rgba(43,72,168,.8)','hauteur d’x',false); line(0,'rgba(217,53,43,.95)','ligne de base',false); line(GUI.desc,'rgba(110,110,120,.7)','jambages',true);
+  const ax=w2c(0,0)[0]; og.strokeStyle='rgba(110,110,120,.5)'; og.setLineDash([3*dpr,5*dpr]); og.beginPath(); og.moveTo(ax,0); og.lineTo(ax,ov.height); og.stroke();
+  og.restore();
+}
+function fontDrawn(){ const d={}; for(const [ch,g] of Object.entries(fontProj.glyphs)) if(g.skel&&g.skel.length) d[ch]=g.skel; return d; }
+function fontOpts(){ return {drawn:fontDrawn(), template:fontProj.template!==false, spacing:fontProj.spacing, family:fontProj.name||'KRFT Titre', styleName:'Regular'}; }
+function download(blob,name){ const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),4000); }
+const fileBase=()=>(fontProj.name||'police').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^\w-]+/g,'-').replace(/^-|-$/g,'')||'police';
+function exportFont(){
+  if(fontOn) saveGlyph();
+  toast('Construction de la police…');
+  setTimeout(()=>{ try{
+    const f=Police.buildFont(fontOpts()), b=Police.writeTTF(f);
+    download(new Blob([b],{type:'font/ttf'}), fileBase()+'.ttf');
+    toast(`Police exportée : ${f.glyphs.length} caractères, dont ${f.drawnCount} dessinés par toi`);
+  }catch(err){ console.error(err); toast('Erreur pendant la construction : '+err.message); } },40); }
+// écrit un texte au centre de la vue avec la police
+function resample(P,closed){ const pts=closed?P.concat([P[0]]):P; const out=[];
+  if(pts.length===1){ out.push(pts[0][0],pts[0][1],pts[0][2],0); return out; }
+  for(let i=1;i<pts.length;i++){ const a=pts[i-1], b=pts[i], d=Math.hypot(b[0]-a[0],b[1]-a[1]), sp=Math.max(0.5,Math.min(a[2],b[2])*0.12), n=Math.max(1,Math.ceil(d/sp));
+    for(let k=(i===1?0:1);k<=n;k++){ const t=k/n; out.push(a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t,0); } }
+  return out; }
+function writeText(text){
+  if(fontOn){ toast("Reviens d'abord à ton dessin pour écrire"); return; }
+  if(stroking||!text.trim()) return;
+  const L=Police.layout(text,fontOpts()), [cx,cy]=viewCenter();
+  const sc=Math.min(0.8*bufW()/view.s/Math.max(1,L.width), 0.3*bufH()/view.s/GUI.cap);   // le texte tient dans l'écran
+  const ox=cx-L.width*sc/2, oy=cy-GUI.cap*sc/2, add=[];
+  for(const part of L.parts){
+    if(part.drawn && fontProj.glyphs[part.drawn]){
+      for(const o of fontProj.glyphs[part.drawn].strokes){ const s=deserStroke(o);
+        s.paths=s.paths.map(a=>a.map((v,i)=>{ const m=i%PS; return m===0?ox+(v+s.dx+part.dx)*sc : m===1?oy+(v+s.dy+part.dy)*sc : m===2?v*sc : v; }));
+        s.dx=s.dy=0; s.p={...s.p,size:s.p.size*sc}; s.bb=strokeBB(s); add.push(s); } }
+    else { const p=strokeParams(); p.size=L.ctx.style.r*sc;
+      const paths=part.S.filter(s=>!s.erase).map(s=>resample(s.p.map(q=>[ox+(q[0]+part.dx)*sc, oy+(q[1]+part.dy)*sc, q[2]*sc]), s.closed));
+      if(paths.length){ const s={id:++sid,p,paths,mir:null,dx:0,dy:0,bb:null}; s.bb=strokeBB(s); add.push(s); } }
+  }
+  if(!add.length) return;
+  pushHist(); strokes=strokes.concat(add); afterListChange(); toast(`« ${text} » écrit`);
+}
+$('fontMode').onclick=()=>fontOn?leaveFont():enterFont();
+$('fontPrev').onclick=()=>fontStep(-1); $('fontNext').onclick=()=>fontStep(1);
+$('fontClearG').onclick=()=>{ clearAll(); fontTouch(); };
+$('fontTpl').onchange=()=>{ dirtyOv=true; };
+$('fontFill').checked=fontProj.template!==false; $('fontFill').onchange=e=>{ fontProj.template=e.target.checked; fontPersist(); };
+$('fontName').value=fontProj.name||'KRFT Titre'; $('fontName').oninput=e=>{ fontProj.name=e.target.value.trim()||'KRFT Titre'; fontPersist(); };
+sliders.fsp=[1,v=>v]; st.fsp=fontProj.spacing??51; setVal('fsp',st.fsp);
+$('fsp').addEventListener('input',()=>{ st.fsp=+$('fsp').value; showVal('fsp'); fontProj.spacing=st.fsp; fontPersist(); });
+$('fontTTF').onclick=exportFont;
+$('fontSave').onclick=()=>{ if(fontOn) saveGlyph(); download(new Blob([JSON.stringify(fontProj)],{type:'application/json'}), fileBase()+'.haptika-police.json'); toast('Projet enregistré'); };
+$('fontOpen').onchange=e=>{ const f=e.target.files[0]; e.target.value=''; if(!f) return;
+  f.text().then(t=>{ const o=JSON.parse(t); if(!o||typeof o.glyphs!=='object') throw new Error('pas un projet de police');
+    fontProj=Object.assign({name:'KRFT Titre',spacing:null,template:true,glyphs:{}},o); fontPersist();
+    $('fontName').value=fontProj.name; $('fontFill').checked=fontProj.template!==false; setVal('fsp',fontProj.spacing??51);
+    for(const k in fontHist) delete fontHist[k]; if(fontOn) loadGlyph(fontCh); else updateFontUI();
+    toast(`Projet ouvert : ${Object.keys(fontProj.glyphs).length} lettres`); }).catch(err=>toast('Projet illisible : '+err.message)); };
+$('fontWrite').onclick=()=>writeText($('fontText').value);
+$('fontText').addEventListener('keydown',e=>{ if(e.key==='Enter') writeText(e.target.value); });
+updateFontUI();
+window.__haptika={get st(){return st}, get strokes(){return strokes}, get MC(){return MC}, get view(){return view}, sel, get font(){return fontProj}, Police, skelOf, writeText, selectGlyph, enterFont, leaveFont};
 </script>
 </body>
 </html>
